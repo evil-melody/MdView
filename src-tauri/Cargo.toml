@@ -1,0 +1,33 @@
+[package]
+name = "MdView"
+version = "0.1.0"
+description = "本地文件管理与 Markdown 工作台 - Tauri + Vue3"
+authors = ["tatsuma"]
+license = "MIT"
+edition = "2021"
+
+[lib]
+name = "mdview_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset", "devtools"] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+dirs = "5"
+chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+docx-rs = "0.4"
+calamine = "0.24"
+rust_xlsxwriter = "0.38"
+pulldown-cmark = { version = "0.11", features = ["html"] }
+
+[features]
+default = []

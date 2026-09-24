@@ -1,0 +1,447 @@
+.fb {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px 10px;
+}
+
+.icon-btn {
+  width: 32px;
+  justify-content: center;
+  padding: 0;
+  font-size: 16px;
+}
+
+.crumbs {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.crumb {
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.crumb:hover {
+  color: var(--accent-2);
+}
+
+.crumb .sep {
+  color: var(--text-3);
+}
+
+.search-crumb {
+  color: var(--accent-2);
+  cursor: default;
+}
+
+/* 顶部搜索：胶囊容器 + 内嵌图标 + 紧凑主按钮，与侧栏搜索框同风格 */
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 4px 0 11px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  flex-shrink: 0;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.search-box:focus-within {
+  border-color: var(--accent);
+  background: var(--input-bg);
+}
+
+.sb-ico {
+  font-size: 12px;
+  opacity: 0.55;
+  flex-shrink: 0;
+}
+
+.search-box input {
+  width: 200px;
+  height: 100%;
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.search-box input::placeholder {
+  color: var(--text-3);
+}
+
+.search-go {
+  height: 26px;
+  padding: 0 13px;
+  font-size: 12px;
+  border-radius: 7px;
+  box-shadow: none;
+  flex-shrink: 0;
+}
+
+.flat-title {
+  font-size: 15.5px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.flat-count {
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: 2px 10px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.toolbar-spacer {
+  flex: 1;
+}
+
+.view-toggle {
+  display: flex;
+  gap: 3px;
+  background: var(--panel-2);
+  padding: 3px;
+  border-radius: 7px;
+}
+
+.vt {
+  width: 28px;
+  height: 26px;
+  border-radius: 5px;
+  font-size: 13px;
+  color: var(--text-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.vt.on {
+  background: var(--accent);
+  color: #fff;
+}
+
+.grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(178px, 1fr));
+  gap: 12px;
+  padding: 8px 20px 18px;
+  align-content: start;
+  overflow-y: auto;
+}
+
+.card {
+  position: relative;
+  display: flex;
+  gap: 11px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.08s;
+}
+
+.card:hover {
+  border-color: rgba(124, 92, 255, 0.55);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+  transform: translateY(-1px);
+}
+
+.card.dir {
+  background: var(--panel-2);
+}
+
+.card-icon {
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 19px;
+  flex-shrink: 0;
+}
+
+.card.dir .card-icon {
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
+.card-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.card-name {
+  font-size: 13px;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-meta {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.tag {
+  background: var(--accent-soft);
+  color: var(--accent-2);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.card-mod {
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.card-actions {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  display: none;
+  gap: 4px;
+}
+
+.card:hover .card-actions {
+  display: flex;
+}
+
+.mini {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--panel-3);
+  border: 1px solid var(--border-2);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
+}
+
+.mini:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.mini.danger:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.rename-wrap {
+  margin-top: -2px;
+}
+
+.rename-input {
+  width: 100%;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  padding: 3px 6px;
+  font-size: 13px;
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+/* list view */
+.list {
+  flex: 1;
+  padding: 4px 20px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+  border: 1px solid transparent;
+}
+
+.row:hover {
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+
+.row-icon {
+  width: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.row-tag {
+  font-size: 11px;
+  background: var(--accent-soft);
+  color: var(--accent-2);
+  border-radius: 4px;
+  padding: 1px 7px;
+}
+
+.row-size {
+  width: 72px;
+  text-align: right;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.row-mod {
+  width: 110px;
+  text-align: right;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.row-actions {
+  display: none;
+  gap: 4px;
+}
+
+.row:hover .row-actions {
+  display: flex;
+}
+
+.empty {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  gap: 8px;
+  padding: 60px 0;
+}
+
+.empty-emoji {
+  font-size: 42px;
+  opacity: 0.55;
+}
+
+/* side 变体：文档打开时左侧紧凑文件列表 */
+.fb.side {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.fb.side .toolbar {
+  padding: 10px 12px;
+  gap: 8px;
+}
+
+.fb.side .crumbs {
+  flex: 1;
+}
+
+.fb.side .list {
+  padding: 4px 8px 12px;
+}
+
+.fb.side .row {
+  padding: 7px 8px;
+  gap: 7px;
+  border-radius: 7px;
+}
+
+.fb.side .row-tag,
+.fb.side .row-size,
+.fb.side .row-mod {
+  display: none;
+}
+
+.fb.side .row-name {
+  font-size: 13px;
+}
+
+.fb.side .row-icon {
+  width: 20px;
+}
+
+.crumb.current {
+  color: var(--text);
+  cursor: default;
+  font-weight: 600;
+}
+
+/* 侧栏工具：列表/树切换 + 收起 */
+.side-tools {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.st-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.st-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.st-btn.on {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}

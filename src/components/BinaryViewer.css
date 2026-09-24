@@ -1,0 +1,309 @@
+.bv {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* ---- 加载中 ---- */
+.bv-loading {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.bv-spinner {
+  width: 26px;
+  height: 26px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: bv-spin 0.8s linear infinite;
+}
+
+@keyframes bv-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---- 错误态 ---- */
+.bv-error {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.bve-ico {
+  font-size: 34px;
+}
+
+/* ---- 图片 / 音视频 ---- */
+.bv-media {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  overflow: auto;
+}
+
+.bv-media img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25);
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* ---- 缩放工具条 ---- */
+.bv-media {
+  position: relative;
+}
+
+.bv-zoombar {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  background: var(--panel-3, var(--panel-2));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
+  z-index: 5;
+}
+
+.bz-btn {
+  min-width: 26px;
+  height: 24px;
+  padding: 0 7px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.bz-btn:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.bz-val {
+  min-width: 44px;
+  text-align: center;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.bz-sep {
+  width: 1px;
+  height: 14px;
+  background: var(--border);
+  margin: 0 3px;
+}
+
+.bv-av {
+  flex-direction: column;
+  gap: 16px;
+}
+
+.bv-av-ico {
+  font-size: 52px;
+}
+
+.bv-av audio,
+.bv-av video {
+  max-width: min(720px, 100%);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+
+/* ---- PDF ---- */
+.bv-pdf {
+  flex: 1;
+  width: 100%;
+  border: none;
+  background: var(--panel-2);
+}
+
+/* ---- docx ---- */
+.bv-doc {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 28px 8% 48px;
+}
+
+.docx-body {
+  max-width: 860px;
+  margin: 0 auto;
+  color: var(--text);
+  font-size: 14.5px;
+  line-height: 1.75;
+}
+
+.docx-body h1,
+.docx-body h2,
+.docx-body h3,
+.docx-body h4 {
+  margin: 1.2em 0 0.5em;
+  line-height: 1.35;
+}
+
+.docx-body p {
+  margin: 0.6em 0;
+}
+
+.docx-body ul,
+.docx-body ol {
+  padding-left: 1.5em;
+  margin: 0.6em 0;
+}
+
+.docx-body img {
+  max-width: 100%;
+  border-radius: var(--radius-sm);
+}
+
+.docx-body table {
+  border-collapse: collapse;
+  margin: 1em 0;
+  width: 100%;
+}
+
+.docx-body td,
+.docx-body th {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+/* ---- 表格（xlsx/xls/csv）---- */
+.bv-sheet {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.bs-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.bs-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.bs-tab {
+  padding: 4px 14px;
+  border-radius: 99px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.bs-tab:hover {
+  background: var(--panel-2);
+}
+
+.bs-tab.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.bs-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 18px 32px;
+}
+
+.bs-body table {
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.bs-body td,
+.bs-body th {
+  border: 1px solid var(--border);
+  padding: 5px 12px;
+  white-space: nowrap;
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bs-body tr:first-child td,
+.bs-body tr:first-child th {
+  position: sticky;
+  top: 0;
+  background: var(--panel-2);
+  font-weight: 600;
+}
+
+/* ---- pptx ---- */
+.bv-ppt {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 8% 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.bp-slide {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+}
+
+.bp-no {
+  font-size: 11.5px;
+  color: var(--accent);
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.bp-text {
+  margin: 0;
+  font-family: inherit;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}

@@ -1,0 +1,168 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 18, 22, 0.42);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.dialog {
+  width: 520px;
+  max-height: 72vh;
+  background: var(--panel);
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+
+.dlg-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dlg-title {
+  font-weight: 700;
+  font-size: 15.5px;
+}
+
+.dlg-count {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-3);
+  background: var(--panel-2);
+  border-radius: 99px;
+  padding: 2px 10px;
+  width: fit-content;
+}
+
+.dlg-body {
+  padding: 14px 16px;
+  overflow-y: auto;
+  min-height: 120px;
+}
+
+/* 空态 */
+.lib-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 36px 0;
+  color: var(--text-2);
+  font-size: 13.5px;
+}
+
+.le-emoji {
+  font-size: 40px;
+  opacity: 0.6;
+  margin-bottom: 6px;
+}
+
+.le-sub {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* 目录列表 */
+.lib-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lib-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.lib-row:hover {
+  border-color: var(--accent);
+  background: var(--panel-3);
+}
+
+.lib-row.active {
+  border-color: var(--accent);
+}
+
+.lr-ico {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-soft);
+  border-radius: 9px;
+  font-size: 17px;
+  flex-shrink: 0;
+}
+
+.lr-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.lr-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lr-path {
+  font-size: 11.5px;
+  color: var(--text-3);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lr-btn {
+  height: 26px;
+  padding: 0 11px;
+  border: 1px solid var(--border-2);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--text-2);
+  font-size: 12px;
+  flex-shrink: 0;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.lr-btn:hover {
+  color: var(--accent-2);
+  border-color: var(--accent);
+}
+
+.lr-btn.danger:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.dlg-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.foot-spacer {
+  flex: 1;
+}

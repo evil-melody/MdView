@@ -1,0 +1,98 @@
+.ftree {
+  overflow: visible;
+  padding: 0 4px;
+}
+
+.ft-empty {
+  color: var(--text-3);
+  font-size: 12px;
+  padding: 10px 8px;
+  text-align: center;
+}
+
+.ft-empty-text {
+  margin-bottom: 8px;
+}
+
+.ft-empty-btn {
+  padding: 5px 12px;
+  border: 1px dashed var(--border-2);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--accent-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ft-empty-btn:hover {
+  border-style: solid;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.ft-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 27px;
+  padding: 0 8px;
+  border-radius: 7px;
+  cursor: pointer;
+  color: var(--text-2);
+  font-size: 12.5px;
+  white-space: nowrap;
+  user-select: none;
+  transition: background 0.12s, color 0.12s;
+}
+
+.ft-row:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.ft-row.active {
+  background: var(--accent-soft);
+  color: var(--accent-2);
+}
+
+/* 资料库根目录：加粗突出 */
+.ft-row.root {
+  font-weight: 600;
+  color: var(--text);
+  margin-top: 2px;
+}
+
+.ft-row.root .ft-name {
+  letter-spacing: 0.01em;
+}
+
+.ft-arrow {
+  width: 12px;
+  flex-shrink: 0;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--text-3);
+  text-align: center;
+  /* 叶子文件不显示箭头占位 */
+  visibility: hidden;
+}
+
+.ft-arrow.vis {
+  visibility: visible;
+}
+
+.ft-ico {
+  flex-shrink: 0;
+  width: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ft-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}

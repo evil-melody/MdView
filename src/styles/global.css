@@ -1,0 +1,210 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg: #141419;
+  --panel: #1c1c24;
+  --panel-2: #24242e;
+  --panel-3: #2c2c38;
+  --border: #2e2e3a;
+  --border-2: #3a3a48;
+  --text: #eceaf2;
+  --text-2: #a8a6b8;
+  --text-3: #6f6d80;
+  --accent: #7c5cff;
+  --accent-2: #9b7fff;
+  --accent-soft: rgba(124, 92, 255, 0.16);
+  --green: #3fbf6b;
+  --orange: #e8a13c;
+  --blue: #5aa9ff;
+  --danger: #e5534b;
+  --code-bg: #20202a;
+  --input-bg: #16161c;
+  --input-focus-bg: #24242e;
+  --scrollbar-thumb: rgba(255, 255, 255, 0.18);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.34);
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* 浅色主题：html[data-theme='light'] */
+:root[data-theme='light'] {
+  --bg: #f5f6fa;
+  --panel: #ffffff;
+  --panel-2: #eef0f5;
+  --panel-3: #e3e6ee;
+  --border: #e2e4ec;
+  --border-2: #cfd3df;
+  --text: #24262e;
+  --text-2: #5c5f70;
+  --text-3: #9a9dab;
+  --accent: #6a48f0;
+  --accent-2: #7c5cff;
+  --accent-soft: rgba(106, 72, 240, 0.1);
+  --green: #2eaa58;
+  --orange: #c07f22;
+  --blue: #2b7fd4;
+  --danger: #d93036;
+  --code-bg: #f2f3f8;
+  --input-bg: #f7f8fc;
+  --input-focus-bg: #ffffff;
+  --scrollbar-thumb: rgba(20, 24, 40, 0.16);
+  --scrollbar-thumb-hover: rgba(20, 24, 40, 0.32);
+  --shadow: 0 8px 28px rgba(20, 24, 40, 0.12);
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+input,
+textarea {
+  font-family: inherit;
+  outline: none;
+}
+
+.scrollable {
+  overflow-y: auto;
+}
+
+/* 全局滚动条：不用类名限定，覆盖所有滚动容器（md-body / 树 / 弹窗 / 表格等），
+   只用 ::-webkit-scrollbar 定制（scrollbar-width 标准属性会让 WKWebView
+   忽略 webkit 伪元素、回退成带轨道的原生滚动条） */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 99px;
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  border: 1px solid var(--border-2);
+  color: var(--text);
+  font-size: 13px;
+  transition: background 0.15s, border-color 0.15s, filter 0.15s;
+}
+
+.btn:hover {
+  background: var(--panel-3);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn.primary:disabled {
+  background: var(--panel-3);
+  border-color: var(--border-2);
+  color: var(--text-3);
+  box-shadow: none;
+}
+
+.btn.primary {
+  background: linear-gradient(135deg, #7c5cff, #6a48f0);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(124, 92, 255, 0.35);
+}
+
+.btn.primary:hover {
+  filter: brightness(1.08);
+}
+
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+}
+
+.btn.ghost:hover {
+  background: var(--panel-2);
+}
+
+.card-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.btn.danger {
+  background: linear-gradient(135deg, #e5484d, #c53035);
+  border-color: transparent;
+  color: #fff;
+}
+
+.btn.danger:hover {
+  filter: brightness(1.08);
+}
+
+.btn.danger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn.danger {
+  background: linear-gradient(135deg, #e5484d, #c53035);
+  border-color: transparent;
+  color: #fff;
+}
+
+.btn.danger:hover {
+  filter: brightness(1.08);
+}
+
+.btn.danger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

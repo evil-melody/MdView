@@ -1,0 +1,29 @@
+.help {
+  flex: 1;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.block {
+  padding: 18px 20px;
+}
+
+.block-title {
+  font-weight: 650;
+  font-size: 14.5px;
+  margin-bottom: 12px;
+}
+
+.h-items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.h-item {
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.7;
+}
