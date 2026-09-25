@@ -6,6 +6,8 @@ import type { MarkdownHeading } from '../utils/markdown'
 import MdPreview from './MdPreview.vue'
 import MindmapView from './MindmapView.vue'
 import BinaryViewer from './BinaryViewer.vue'
+import OfficeDocEditor from './OfficeDocEditor.vue'
+import OfficeSheetEditor from './OfficeSheetEditor.vue'
 import FileIcon from './FileIcon.vue'
 import { viewerTypeFor, officeEditable } from '../utils/viewer'
 import { convertFileSrc } from '@tauri-apps/api/core'
@@ -30,6 +32,7 @@ const emit = defineEmits<{
   (e: 'switch-tab', path: string): void
   (e: 'close-tab', path: string): void
   (e: 'open-ai'): void
+  (e: 'dirty'): void
 }>()
 
 const tab = ref<ViewTab>('preview')
@@ -51,8 +54,11 @@ const isViewerKind = computed(() => {
   return v !== null && !officeEditable(props.entry)
 })
 
-/** docx/xlsx：预览态复用 BinaryViewer 富渲染，编辑态走 Markdown 文本 */
+/** docx/xlsx：预览态复用 BinaryViewer 富渲染，编辑态走 office 原生组件 */
 const isOffice = computed(() => officeEditable(props.entry))
+const isDocx = computed(
+  () => (props.entry?.ext || '').toLowerCase() === 'docx'
+)
 
 /** html/htm：预览走原生 webview 渲染（asset 协议 iframe），不走 Markdown 管道 */
 const isHtml = computed(
@@ -77,6 +83,15 @@ function scrollTo(id: string) {
   const el = document.getElementById(id)
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
+
+/** office 编辑器实例（docx/xlsx 二选一），供保存时导出原生二进制 */
+const officeRef = ref<any>(null)
+
+async function exportOffice(): Promise<string | null> {
+  return (await officeRef.value?.exportBase64?.()) ?? null
+}
+
+defineExpose({ exportOffice })
 </script>
 
 <template>
@@ -155,6 +170,23 @@ function scrollTo(id: string) {
               :title="entry?.name || 'HTML 预览'"
             ></iframe>
             <MdPreview v-else :content="content" :dirty="dirty" :base-path="basePath" />
+          </div>
+          <div v-else-if="tab === 'edit' && isOffice" class="flex1">
+            <!-- docx/xlsx：office 原生编辑器（canvas-editor / Univer），保存导出原格式 -->
+            <OfficeDocEditor
+              v-if="isDocx"
+              ref="officeRef"
+              :key="entry!.path"
+              :path="entry!.path"
+              @change="emit('dirty')"
+            />
+            <OfficeSheetEditor
+              v-else
+              ref="officeRef"
+              :key="entry!.path"
+              :path="entry!.path"
+              @change="emit('dirty')"
+            />
           </div>
           <div v-else-if="tab === 'edit' && isHtml" class="flex1">
             <textarea

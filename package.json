@@ -13,10 +13,16 @@
     "app:build": "tauri build"
   },
   "dependencies": {
+    "@hufe921/canvas-editor": "^1.0.3",
+    "@hufe921/canvas-editor-plugin-docx": "^1.0.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-opener": "^2",
+    "@univerjs/preset-sheets-core": "^1.0.2",
+    "@univerjs/preset-sheets-drawing": "^1.0.2",
+    "@univerjs/presets": "^1.0.2",
     "dompurify": "^3.2.4",
+    "exceljs": "^4.4.0",
     "fflate": "^0.8.3",
     "mammoth": "^1.12.3",
     "marked": "^15.0.7",

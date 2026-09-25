@@ -5,7 +5,7 @@ pub mod office;
 use commands::{
     ai_chat_stream, delete_path, index_root, load_config_cmd, read_binary_base64, read_office_md,
     read_text, rename_path, save_config_cmd, scan_directory, search_files, toggle_devtools,
-    write_office_md, write_text,
+    write_binary_base64, write_office_md, write_text,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -18,6 +18,7 @@ pub fn run() {
             index_root,
             read_text,
             read_binary_base64,
+            write_binary_base64,
             toggle_devtools,
             read_office_md,
             write_office_md,

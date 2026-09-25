@@ -52,7 +52,7 @@ const effectiveView = computed<'grid' | 'list'>(() =>
   props.variant === 'side' ? 'list' : view.value
 )
 
-const kindOrder = ['markdown', 'text', 'config', 'code', 'image', 'document', 'audio', 'video', 'archive', 'other']
+const kindOrder = ['markdown', 'text', 'config', 'code', 'image', 'document', 'sheet', 'slide', 'pdf', 'audio', 'video', 'archive', 'other']
 
 const sortedEntries = computed(() => {
   const arr = [...props.entries]

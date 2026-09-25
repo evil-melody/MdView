@@ -19,6 +19,10 @@ export const readOfficeMd = (path: string) =>
 export const writeOfficeMd = (path: string, md: string) =>
   invoke<boolean>('write_office_md', { path, md })
 
+/** office 原生编辑保存：前端组件导出的二进制（docx/xlsx）base64 落盘 */
+export const writeBinaryBase64 = (path: string, contents: string) =>
+  invoke<boolean>('write_binary_base64', { path, contents })
+
 export const writeText = (path: string, content: string) =>
   invoke<boolean>('write_text', { path, content })
 

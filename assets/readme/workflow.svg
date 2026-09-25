@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="240" viewBox="0 0 1200 240" role="img" aria-labelledby="wf-title wf-desc">
+  <title id="wf-title">MdView 工作流</title>
+  <desc id="wf-desc">扫描资料库并分类索引，多页签预览与编辑，保存写回原格式，远程 AI 流式辅助。</desc>
+
+  <rect width="1200" height="240" rx="24" fill="#141419"/>
+  <rect x="0.5" y="0.5" width="1199" height="239" rx="23.5" fill="none" stroke="#2E2E3A"/>
+
+  <g font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif">
+    <!-- 阶段卡片 -->
+    <g>
+      <rect x="56" y="56" width="240" height="104" rx="14" fill="#1C1C24" stroke="#2E2E3A"/>
+      <circle cx="88" cy="88" r="14" fill="rgba(124,92,255,0.16)"/>
+      <text x="88" y="94" text-anchor="middle" font-size="16" font-weight="700" fill="#9B7FFF">1</text>
+      <text x="112" y="94" font-size="21" font-weight="600" fill="#ECEAF2">扫描资料库</text>
+      <text x="80" y="126" font-size="17" fill="#A8A6B8">多目录索引 · 隐藏文件过滤</text>
+    </g>
+    <path d="M296 108 h36" stroke="#3A3A48" stroke-width="2"/>
+    <path d="M326 102 l10 6 -10 6" fill="none" stroke="#7C5CFF" stroke-width="2"/>
+
+    <g>
+      <rect x="336" y="56" width="240" height="104" rx="14" fill="#1C1C24" stroke="#2E2E3A"/>
+      <circle cx="368" cy="88" r="14" fill="rgba(124,92,255,0.16)"/>
+      <text x="368" y="94" text-anchor="middle" font-size="16" font-weight="700" fill="#9B7FFF">2</text>
+      <text x="392" y="94" font-size="21" font-weight="600" fill="#ECEAF2">分类导航</text>
+      <text x="360" y="126" font-size="17" fill="#A8A6B8">文档 / 表格 / 演示 / PDF…</text>
+    </g>
+    <path d="M576 108 h36" stroke="#3A3A48" stroke-width="2"/>
+    <path d="M606 102 l10 6 -10 6" fill="none" stroke="#7C5CFF" stroke-width="2"/>
+
+    <g>
+      <rect x="616" y="56" width="240" height="104" rx="14" fill="#1C1C24" stroke="#2E2E3A"/>
+      <circle cx="648" cy="88" r="14" fill="rgba(124,92,255,0.16)"/>
+      <text x="648" y="94" text-anchor="middle" font-size="16" font-weight="700" fill="#9B7FFF">3</text>
+      <text x="672" y="94" font-size="21" font-weight="600" fill="#ECEAF2">多页签预览 / 编辑</text>
+      <text x="640" y="126" font-size="17" fill="#A8A6B8">脑图 · Office 编辑 · 图片缩放</text>
+    </g>
+    <path d="M856 108 h36" stroke="#3A3A48" stroke-width="2"/>
+    <path d="M886 102 l10 6 -10 6" fill="none" stroke="#7C5CFF" stroke-width="2"/>
+
+    <g>
+      <rect x="896" y="56" width="240" height="104" rx="14" fill="#1C1C24" stroke="#2E2E3A"/>
+      <circle cx="928" cy="88" r="14" fill="rgba(124,92,255,0.16)"/>
+      <text x="928" y="94" text-anchor="middle" font-size="16" font-weight="700" fill="#9B7FFF">4</text>
+      <text x="952" y="94" font-size="21" font-weight="600" fill="#ECEAF2">保存写回</text>
+      <text x="920" y="126" font-size="17" fill="#A8A6B8">docx / xlsx 导出原格式</text>
+    </g>
+
+    <!-- 底部 AI 流式条 -->
+    <rect x="56" y="180" width="1080" height="36" rx="18" fill="rgba(124,92,255,0.10)" stroke="rgba(124,92,255,0.45)"/>
+    <text x="596" y="204" text-anchor="middle" font-size="18" fill="#9B7FFF">✨ 全程可调用远程 AI（OpenAI 兼容）：流式摘要 · 自动打标 · 内容解读</text>
+  </g>
+</svg>

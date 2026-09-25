@@ -1,0 +1,35 @@
+.office-editor-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.office-editor-container {
+  flex: 1;
+  min-height: 200px;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* canvas-editor 内部页面容器兜底：滚动作用于编辑区而非被裁剪 */
+.office-editor-container :deep(.ce-editor) {
+  overflow-y: auto;
+}
+
+/* Univer：隐藏顶部 ribbon tab 横条（无功能入口意义，保留公式栏/右键菜单/编辑区） */
+.office-editor-container :deep([data-u-comp="ribbon-header-menu"]) {
+  display: none !important;
+}
+
+.office-error {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--tx-weak, #9ca3af);
+  font-size: 13px;
+}

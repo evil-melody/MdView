@@ -31,7 +31,7 @@ export function viewerTypeFor(entry: FileEntry | null | undefined): TabViewer['t
   return null
 }
 
-/** 是否可编辑（Markdown 枢纽往返：docx/xlsx 读为 md 编辑，保存写回原格式；xls 只读） */
+/** office 原生编辑：docx 走 canvas-editor、xlsx 走 Univer，编辑器导出原格式写回；xls 只读 */
 export function officeEditable(entry: FileEntry | null | undefined): boolean {
   if (!entry || entry.is_dir) return false
   const ext = (entry.ext || '').toLowerCase()

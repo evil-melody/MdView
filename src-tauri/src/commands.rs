@@ -31,7 +31,10 @@ fn classify(path: &Path) -> String {
         "json" | "yaml" | "yml" | "toml" | "ini" | "cfg" | "conf" => "config",
         "js" | "ts" | "tsx" | "jsx" | "vue" | "rs" | "go" | "py" | "c" | "cpp" | "h" | "java" | "css" | "scss" | "html" => "code",
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "ico" => "image",
-        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" => "document",
+        "pdf" => "pdf",
+        "doc" | "docx" => "document",
+        "xls" | "xlsx" | "csv" => "sheet",
+        "ppt" | "pptx" => "slide",
         "mp3" | "wav" | "flac" | "m4a" => "audio",
         "mp4" | "mov" | "webm" | "avi" => "video",
         "zip" | "tar" | "gz" | "rar" | "7z" => "archive",
@@ -103,6 +106,17 @@ pub fn read_binary_base64(path: String) -> Result<String, String> {
     use base64::Engine as _;
     let data = fs::read(&path).map_err(|e| e.to_string())?;
     Ok(base64::engine::general_purpose::STANDARD.encode(data))
+}
+
+/// 将 base64 内容写为二进制文件（office 原生编辑保存路径：前端导出 docx/xlsx 字节落盘）
+#[tauri::command]
+pub fn write_binary_base64(path: String, contents: String) -> Result<bool, String> {
+    use base64::Engine as _;
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(contents)
+        .map_err(|e| format!("base64 解码失败: {}", e))?;
+    fs::write(&path, data).map_err(|e| e.to_string())?;
+    Ok(true)
 }
 
 /// 切换 Webview 调试器（前端 Cmd+Shift+I / F12 触发，排查渲染问题用）。

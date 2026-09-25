@@ -4,7 +4,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { state, type OpenTab } from './store'
-import { loadConfig, saveConfig, scanDirectory, indexRoot, deletePath, renamePath, searchFiles, readText, writeText, readOfficeMd, writeOfficeMd, aiChatStream } from './api'
+import { loadConfig, saveConfig, scanDirectory, indexRoot, deletePath, renamePath, searchFiles, readText, writeText, readOfficeMd, writeBinaryBase64, aiChatStream } from './api'
 import type { FileEntry, AppConfig } from './types'
 import type { PageKey } from './store'
 import { KIND_LABEL } from './types'
@@ -32,6 +32,8 @@ const activeBaseDir = computed<string | null>(() => {
   return i > 0 ? p.slice(0, i) : null
 })
 const showSettings = ref(false)
+/** PreviewPane 实例引用：office 保存时调 exportOffice() 取原生二进制 */
+const paneRef = ref<any>(null)
 const showLibDialog = ref(false)
 const toast = ref('')
 // AI 浮窗状态（全局：FAB + 流式输出）
@@ -530,7 +532,15 @@ async function saveCurrent() {
   const t = state.tabs.find((x) => x.entry.path === state.activeTabPath)
   if (!t) return
   try {
-    await writeTextNoted(t)
+    const ext = (t.entry.ext || '').toLowerCase()
+    if (ext === 'docx' || ext === 'xlsx') {
+      // office 原生编辑：编辑器导出原格式二进制，直接落盘
+      const b64 = await paneRef.value?.exportOffice?.()
+      if (!b64) throw new Error('编辑器未就绪，导出失败')
+      await writeBinaryBase64(t.entry.path, b64)
+    } else {
+      await writeTextNoted(t)
+    }
     t.dirty = false
     // docx/xlsx 保存后重建富预览（mammoth/SheetJS），使预览态与磁盘一致
     if (officeEditable(t.entry) && t.viewer) {
@@ -543,13 +553,13 @@ async function saveCurrent() {
 }
 
 async function writeTextNoted(t: OpenTab) {
-  const ext = (t.entry.ext || '').toLowerCase()
-  // docx/xlsx 页签内容是 Markdown，保存时经 Rust 转回原格式
-  if (ext === 'docx' || ext === 'xlsx') {
-    await writeOfficeMd(t.entry.path, t.content)
-  } else {
-    await writeText(t.entry.path, t.content)
-  }
+  await writeText(t.entry.path, t.content)
+}
+
+/** office 原生编辑器内容变更 → 标脏 */
+function markOfficeDirty() {
+  const t = state.tabs.find((x) => x.entry.path === state.activeTabPath)
+  if (t) t.dirty = true
 }
 
 // ── AI 助手：流式输出 + 全局浮窗 ─────────────────────────
@@ -772,6 +782,7 @@ onMounted(init)
         <!-- 文档打开：直接全宽预览（树在左侧资料库中） -->
         <PreviewPane
           v-if="state.selected"
+          ref="paneRef"
           class="wb-full"
           :entry="state.selected"
             :content="content"
@@ -788,6 +799,7 @@ onMounted(init)
             @update:content="content = $event"
             @close="closeDoc"
             @open-ai="openAiDrawer"
+            @dirty="markOfficeDirty"
           />
         <FileBrowser
           v-else

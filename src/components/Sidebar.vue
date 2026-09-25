@@ -23,10 +23,13 @@ const emit = defineEmits<{
 
 const counts = computed(() => kindCounts())
 
-const categoryOrder = ['markdown', 'document', 'image', 'text', 'code', 'config', 'archive', 'video', 'audio', 'other']
+const categoryOrder = ['markdown', 'document', 'sheet', 'slide', 'pdf', 'image', 'text', 'code', 'config', 'archive', 'video', 'audio', 'other']
 const categoryIcons: Record<string, string> = {
   markdown: '📝',
   document: '📃',
+  sheet: '📊',
+  slide: '📽',
+  pdf: '📕',
   image: '🖼',
   text: '📄',
   code: '</>',
