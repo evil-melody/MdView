@@ -32,9 +32,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["dmg", "app"],
     "macOS": {
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "targets": ["dmg", "app"]
+    },
+    "windows": {
+      "targets": ["msi"]
     },
     "fileAssociations": [
       { "ext": ["md", "markdown", "mdx"], "name": "Markdown 文档", "role": "Editor", "mimeType": "text/markdown" },

@@ -71,6 +71,38 @@ npm run app:build
 
 打包产物位于 `src-tauri/target/release/bundle/`。
 
+## Windows 打包
+
+Tauri 2 的 Windows 构建**必须在 Windows 主机（或 Windows CI）上执行**——macOS / Linux 无法交叉编译出 Windows 可执行文件（需要 MSVC 工具链与 WebView2 运行时）。在 Windows 上按以下步骤构建：
+
+### 环境要求
+- **Node.js ≥ 20**
+- **Rust 工具链**：`rustup` 安装时勾选 **MSVC 构建工具**（或 `rustup toolchain install stable-msvc`）
+- **Microsoft C++ 生成工具（MSVC）**：安装 [Visual Studio 生成工具](https://visualstudio.microsoft.com/zh-hans/downloads/)，勾选「使用 C++ 的桌面开发」
+- **WebView2 运行时**：Windows 11 已内置；Windows 10 需在[微软官网](https://developer.microsoft.com/zh-cn/microsoft-edge/webview2/)安装（Tauri 2 渲染依赖）
+
+### 构建
+```powershell
+# 安装依赖
+npm install
+
+# 打包发布（产出 .msi 安装包）
+npm run app:build
+```
+
+产物位于 `src-tauri/target/release/bundle/msi/MdView_0.1.0_x64_en-US.msi`，双击即装。
+
+### 说明与可选加固
+- **跨平台产物差异**：macOS 产出 `.app / .dmg`，Windows 产出 `.msi`（已在 `tauri.conf.json` 的 `bundle.windows.targets` 中配置），两者互不兼容，需各自在对应系统打包。
+- **安装包签名（可选）**：未签名的 `.msi` 在首次运行时会被 SmartScreen 拦截。如需消除警告，准备代码签名证书后设置环境变量再打包：
+  ```powershell
+  $env:TAURI_SIGNING_PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY----- ..."
+  $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "你的密钥密码"
+  npm run app:build
+  ```
+  正式发布建议同时做 [Microsoft 智能屏幕](https://learn.microsoft.com/zh-cn/windows/security/operating-system-security/virus-and-threat-protection/microsoft-defender-smartscreen/) 信任的 EV 代码签名证书。
+- **NSIS 安装包（可选）**：若偏好 `.exe` 安装器，将 `tauri.conf.json` 中 `bundle.windows.targets` 改为 `["nsis", "msi"]` 即可。
+
 ## 技术栈
 
 | 层 | 技术 |
