@@ -33,6 +33,9 @@
   "bundle": {
     "active": true,
     "targets": ["dmg", "app"],
+    "macOS": {
+      "signingIdentity": "-"
+    },
     "fileAssociations": [
       { "ext": ["md", "markdown", "mdx"], "name": "Markdown 文档", "role": "Editor", "mimeType": "text/markdown" },
       { "ext": ["txt"], "name": "文本文档", "role": "Editor", "mimeType": "text/plain" }
