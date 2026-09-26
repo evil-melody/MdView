@@ -1,6 +1,6 @@
 [package]
 name = "MdView"
-version = "0.1.0"
+version = "1.0.0"
 description = "本地文件管理与 Markdown 工作台 - Tauri + Vue3"
 authors = ["tatsuma"]
 license = "MIT"
