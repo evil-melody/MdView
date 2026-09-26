@@ -6,8 +6,9 @@ import type { MarkdownHeading } from '../utils/markdown'
 import MdPreview from './MdPreview.vue'
 import MindmapView from './MindmapView.vue'
 import BinaryViewer from './BinaryViewer.vue'
-import OfficeDocEditor from './OfficeDocEditor.vue'
+import OfficeDocInlineEditor from './OfficeDocInlineEditor.vue'
 import OfficeSheetEditor from './OfficeSheetEditor.vue'
+import PptxInlineEditor from './PptxInlineEditor.vue'
 import FileIcon from './FileIcon.vue'
 import { viewerTypeFor, officeEditable } from '../utils/viewer'
 import { convertFileSrc } from '@tauri-apps/api/core'
@@ -54,10 +55,13 @@ const isViewerKind = computed(() => {
   return v !== null && !officeEditable(props.entry)
 })
 
-/** docx/xlsx：预览态复用 BinaryViewer 富渲染，编辑态走 office 原生组件 */
+/** docx/xlsx/pptx：预览态复用 BinaryViewer 富渲染，编辑态走对应编辑器 */
 const isOffice = computed(() => officeEditable(props.entry))
 const isDocx = computed(
   () => (props.entry?.ext || '').toLowerCase() === 'docx'
+)
+const isPptx = computed(
+  () => (props.entry?.ext || '').toLowerCase() === 'pptx'
 )
 
 /** html/htm：预览走原生 webview 渲染（asset 协议 iframe），不走 Markdown 管道 */
@@ -86,6 +90,15 @@ function scrollTo(id: string) {
 
 /** office 编辑器实例（docx/xlsx 二选一），供保存时导出原生二进制 */
 const officeRef = ref<any>(null)
+
+/** docx 内联编辑器（预览同款渲染 + contenteditable）失败标记：回退 Markdown 枢纽编辑 */
+const docxEditorFailed = ref(false)
+watch(
+  () => props.entry?.path,
+  () => {
+    docxEditorFailed.value = false
+  }
+)
 
 async function exportOffice(): Promise<string | null> {
   return (await officeRef.value?.exportBase64?.()) ?? null
@@ -172,18 +185,33 @@ defineExpose({ exportOffice })
             <MdPreview v-else :content="content" :dirty="dirty" :base-path="basePath" />
           </div>
           <div v-else-if="tab === 'edit' && isOffice" class="flex1">
-            <!-- docx/xlsx：office 原生编辑器（canvas-editor / Univer），保存导出原格式 -->
-            <OfficeDocEditor
-              v-if="isDocx"
+            <!-- docx：预览同款渲染 + contenteditable 就地编辑（turndown 同步回 Markdown） -->
+            <OfficeDocInlineEditor
+              v-if="isDocx && !docxEditorFailed"
+              :key="entry!.path"
+              :src="convertFileSrc(entry!.path)"
+              @change="emit('dirty')"
+              @update:content="(v: string) => emit('update:content', v)"
+              @error="docxEditorFailed = true"
+            />
+            <textarea
+              v-else-if="isDocx"
+              class="editor scrollable full"
+              :value="content"
+              @input="emit('update:content', ($event.target as HTMLTextAreaElement).value)"
+              spellcheck="false"
+            ></textarea>
+            <!-- xlsx：Univer 表格编辑器 -->
+            <OfficeSheetEditor
+              v-else-if="!isPptx"
               ref="officeRef"
               :key="entry!.path"
               :path="entry!.path"
               @change="emit('dirty')"
             />
-            <OfficeSheetEditor
+            <!-- pptx：在预览渲染层上直接编辑文字 / 点击图片替换 -->
+            <PptxInlineEditor
               v-else
-              ref="officeRef"
-              :key="entry!.path"
               :path="entry!.path"
               @change="emit('dirty')"
             />

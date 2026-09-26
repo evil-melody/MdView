@@ -13,11 +13,10 @@
     "app:build": "tauri build"
   },
   "dependencies": {
-    "@hufe921/canvas-editor": "^1.0.3",
-    "@hufe921/canvas-editor-plugin-docx": "^1.0.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-opener": "^2",
+    "@types/turndown": "^5.0.6",
     "@univerjs/preset-sheets-core": "^1.0.2",
     "@univerjs/preset-sheets-drawing": "^1.0.2",
     "@univerjs/presets": "^1.0.2",
@@ -29,7 +28,9 @@
     "markmap-lib": "^0.18.12",
     "markmap-view": "^0.18.12",
     "mermaid": "^12.0.0",
+    "turndown": "^7.2.4",
     "vue": "^3.5.13",
+    "vue-files-preview": "^1.0.43",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

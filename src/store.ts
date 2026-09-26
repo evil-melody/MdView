@@ -6,14 +6,8 @@ export type PageKey = 'home' | 'files' | 'recent' | 'category' | 'help'
 /** 非文本文件的预览模型（图片/PDF/音视频/office） */
 export interface TabViewer {
   type: 'image' | 'pdf' | 'audio' | 'video' | 'docx' | 'sheet' | 'pptx'
-  /** 媒体类：asset 协议地址 */
+  /** asset 协议地址：媒体类直接渲染；office 类喂给 vue-files-preview（照搬 InspireLoom） */
   src?: string
-  /** docx：mammoth 转出的 html */
-  html?: string
-  /** 表格类：每个 sheet 一份 html */
-  sheets?: { name: string; html: string }[]
-  /** pptx：每页提取出的纯文本 */
-  slides?: string[]
   error?: string
 }
 

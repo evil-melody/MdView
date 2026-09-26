@@ -171,6 +171,11 @@
   transform: translateY(-1px);
 }
 
+.card.sel {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 6px 18px rgba(124, 92, 255, 0.28);
+}
+
 .card.dir {
   background: var(--panel-2);
 }
@@ -300,6 +305,11 @@
 .row:hover {
   background: var(--panel-2);
   border-color: var(--border);
+}
+
+.row.sel {
+  background: var(--accent-soft);
+  border-color: var(--accent);
 }
 
 .row-icon {

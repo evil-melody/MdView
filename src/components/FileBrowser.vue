@@ -15,10 +15,13 @@ const props = defineProps<{
   mode?: 'browse' | 'flat'
   flatTitle?: string
   variant?: 'full' | 'side'
+  /** 当前已打开页签路径：未本地高亮时作为兜底高亮（返回文件列表时仍能定位上下文） */
+  activePath?: string | null
 }>()
 
 const emit = defineEmits<{
   (e: 'select', entry: FileEntry): void
+  (e: 'open', entry: FileEntry): void
   (e: 'delete', entry: FileEntry): void
   (e: 'rename', entry: FileEntry, name: string): void
   (e: 'up'): void
@@ -28,6 +31,20 @@ const emit = defineEmits<{
   (e: 'collapse-list'): void
   (e: 'entry-context', entry: FileEntry, ev: MouseEvent): void
 }>()
+
+/** 本地高亮路径：单击仅选中高亮，双击才真正打开 */
+const highlighted = ref<string | null>(null)
+function onCardClick(e: FileEntry) {
+  highlighted.value = e.path
+  emit('select', e)
+}
+function onCardOpen(e: FileEntry) {
+  highlighted.value = e.path
+  emit('open', e)
+}
+function isSelected(p: string): boolean {
+  return highlighted.value === p || (!highlighted.value && p === props.activePath)
+}
 
 const vFocus = {
   mounted: (el: HTMLElement) => el.focus()
@@ -186,9 +203,9 @@ function focusSearch(e: MouseEvent) {
         v-else
         :key="e.path"
         class="card"
-        :class="{ dir: e.is_dir }"
-        @click="emit('select', e)"
-        @dblclick="emit('select', e)"
+        :class="{ dir: e.is_dir, sel: isSelected(e.path) }"
+        @click="onCardClick(e)"
+        @dblclick="onCardOpen(e)"
         @contextmenu.prevent="emit('entry-context', e, $event)"
       >
         <div class="card-icon"><FileIcon :name="e.name" :is-dir="e.is_dir" :size="30" /></div>
@@ -226,7 +243,9 @@ function focusSearch(e: MouseEvent) {
         v-else
         :key="e.path"
         class="row"
-        @click="emit('select', e)"
+        :class="{ sel: isSelected(e.path) }"
+        @click="onCardClick(e)"
+        @dblclick="onCardOpen(e)"
         @contextmenu.prevent="emit('entry-context', e, $event)"
       >
         <span class="row-icon"><FileIcon :name="e.name" :is-dir="e.is_dir" :size="18" /></span>

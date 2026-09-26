@@ -1,19 +1,24 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, defineAsyncComponent } from 'vue'
 import type { FileEntry } from '../types'
 import type { TabViewer } from '../store'
+
+// 照搬 InspireLoom：vue-files-preview 原文件预览器（docx/ppt/xlsx/pdf 等内核自带），样式随组件动态加载
+const VueFilesPreview = defineAsyncComponent(async () => {
+  await import('vue-files-preview/lib/style.css')
+  const mod: any = await import('vue-files-preview')
+  return mod.VueFilesPreview ?? mod.default?.VueFilesPreview ?? mod.default ?? mod
+})
 
 const props = defineProps<{
   entry: FileEntry | null
   viewer?: TabViewer | null
 }>()
 
-const activeSheet = ref(0)
 const imgFailed = ref(false)
 watch(
   () => [props.viewer, props.entry?.path],
   () => {
-    activeSheet.value = 0
     imgFailed.value = false
     resetZoom()
   }
@@ -144,31 +149,12 @@ function onPanEnd() {
         <video controls :src="viewer.src"></video>
       </div>
 
-      <!-- docx -->
-      <div v-else-if="viewer.type === 'docx' && viewer.html" class="bv-doc scrollable">
-        <div class="docx-body" v-html="viewer.html"></div>
-      </div>
-
-      <!-- 表格 -->
-      <div v-else-if="viewer.type === 'sheet' && viewer.sheets?.length" class="bv-sheet">
-        <div v-if="viewer.sheets.length > 1" class="bs-tabs">
-          <button
-            v-for="(s, i) in viewer.sheets"
-            :key="s.name"
-            class="bs-tab"
-            :class="{ active: i === activeSheet }"
-            @click="activeSheet = i"
-          >{{ s.name }}</button>
-        </div>
-        <div class="bs-body scrollable" v-html="viewer.sheets[activeSheet]?.html"></div>
-      </div>
-
-      <!-- pptx -->
-      <div v-else-if="viewer.type === 'pptx' && viewer.slides?.length" class="bv-ppt scrollable">
-        <div v-for="(s, i) in viewer.slides" :key="i" class="bp-slide">
-          <div class="bp-no">第 {{ i + 1 }} 页</div>
-          <pre class="bp-text">{{ s || '（空白页）' }}</pre>
-        </div>
+      <!-- office（docx/sheet/pptx）：vue-files-preview 按 asset URL 原文件渲染 -->
+      <div
+        v-else-if="viewer.type === 'docx' || viewer.type === 'sheet' || viewer.type === 'pptx'"
+        class="bv-vfp"
+      >
+        <VueFilesPreview :url="viewer.src" height="100%" />
       </div>
     </template>
   </div>

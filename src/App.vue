@@ -4,7 +4,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { state, type OpenTab } from './store'
-import { loadConfig, saveConfig, scanDirectory, indexRoot, deletePath, renamePath, searchFiles, readText, writeText, readOfficeMd, writeBinaryBase64, aiChatStream } from './api'
+import { loadConfig, saveConfig, scanDirectory, indexRoot, deletePath, renamePath, searchFiles, readText, writeText, readOfficeMd, writeOfficeMd, writeBinaryBase64, aiChatStream } from './api'
 import type { FileEntry, AppConfig } from './types'
 import type { PageKey } from './store'
 import { KIND_LABEL } from './types'
@@ -117,7 +117,7 @@ function kindFromPath(p: string): string {
     bmp: 'image', ico: 'image', avif: 'image', heic: 'image',
     pdf: 'document', doc: 'document', docx: 'document',
     xlsx: 'document', xls: 'document', xlsm: 'document', csv: 'document', tsv: 'document',
-    pptx: 'document', ppt: 'document',
+    pptx: 'slide', ppt: 'slide',
     mp3: 'audio', wav: 'audio', m4a: 'audio', flac: 'audio', ogg: 'audio', aac: 'audio',
     mp4: 'video', mov: 'video', webm: 'video', m4v: 'video',
     zip: 'archive', tar: 'archive', gz: 'archive', '7z': 'archive', rar: 'archive'
@@ -126,16 +126,10 @@ function kindFromPath(p: string): string {
   return 'code'
 }
 
-async function init() {
-  applyTheme(theme.value)
-  state.config = await loadConfig()
-  if (state.config.scan_roots.length) {
-    await openDir(state.config.scan_roots[0])
-    await rebuildIndex(false)
-  }
-  await listen<string[]>('open-file', async (ev) => {
-    const p = ev.payload?.[0]
-    if (!p) return
+/** 打开一组外部传入路径（系统文件关联 / Finder 拖入） */
+async function openExternalPaths(paths: string[]) {
+  for (const p of paths) {
+    if (!p) continue
     const name = p.split('/').pop() || p
     await openTab({
       name,
@@ -146,7 +140,27 @@ async function init() {
       modified: '',
       kind: kindFromPath(p)
     })
+  }
+}
+
+async function init() {
+  applyTheme(theme.value)
+  state.config = await loadConfig()
+  if (state.config.scan_roots.length) {
+    await openDir(state.config.scan_roots[0])
+    await rebuildIndex(false)
+  }
+  // 先注册 open-file 监听器，再取冷启动缓冲，避免事件竞态
+  await listen<string[]>('open-file', async (ev) => {
+    await openExternalPaths(ev.payload || [])
   })
+  // 冷启动（窗口尚未就绪）被系统文件关联触发的打开请求由 Rust 缓存，此处取走
+  try {
+    const pending = (await invoke('take_pending_opens')) as string[]
+    if (Array.isArray(pending) && pending.length) await openExternalPaths(pending)
+  } catch {
+    /* 非冷启动或取缓冲失败则忽略 */
+  }
   // Finder 拖拽 md 文件进窗口 → 页签打开
   await getCurrentWebview().onDragDropEvent(async (ev) => {
     if (ev.payload.type !== 'drop') return
@@ -534,15 +548,23 @@ async function saveCurrent() {
   try {
     const ext = (t.entry.ext || '').toLowerCase()
     if (ext === 'docx' || ext === 'xlsx') {
-      // office 原生编辑：编辑器导出原格式二进制，直接落盘
+      // office 原生编辑：编辑器导出原格式二进制，直接落盘；
+      // docx 原生编辑器不可用（失败回退 Markdown 枢纽）时导出为 null → md 写回 docx
       const b64 = await paneRef.value?.exportOffice?.()
-      if (!b64) throw new Error('编辑器未就绪，导出失败')
-      await writeBinaryBase64(t.entry.path, b64)
+      if (b64) {
+        await writeBinaryBase64(t.entry.path, b64)
+      } else if (ext === 'docx') {
+        await writeOfficeMd(t.entry.path, t.content)
+      } else {
+        throw new Error('编辑器未就绪，导出失败')
+      }
+    } else if (ext === 'pptx') {
+      // pptx 文字 / 图片已在 PptxInlineEditor 中直接写回文件；保存按钮仅清脏标记
     } else {
       await writeTextNoted(t)
     }
     t.dirty = false
-    // docx/xlsx 保存后重建富预览（mammoth/SheetJS），使预览态与磁盘一致
+    // office 保存后重建富预览（后端 docx HTML / SheetJS / pptx 懒加载），使预览态与磁盘一致
     if (officeEditable(t.entry) && t.viewer) {
       t.viewer = await buildViewer(t.entry)
     }
@@ -715,6 +737,12 @@ onMounted(() => {
   })
   // 调试模式快捷键：Cmd/Ctrl+Shift+I 或 F12 打开/关闭 Webview 调试器
   window.addEventListener('keydown', onDevtoolsKey)
+  // 空闲时预加载 office 预览库 chunk，消除首次打开 office 文件的卡顿
+  const idle = (window as any).requestIdleCallback || ((cb: any) => setTimeout(cb, 1500))
+  idle(() => {
+    import('vue-files-preview/lib/style.css').catch(() => {})
+    import('vue-files-preview').catch(() => {})
+  })
 })
 
 onBeforeUnmount(() => {
@@ -810,7 +838,8 @@ onMounted(init)
           :search-active="!!state.searchResults.length"
           :mode="showingFlat ? 'flat' : 'browse'"
           :flat-title="pageTitle"
-          @select="onSelect"
+          :active-path="state.activeTabPath"
+          @open="onSelect"
           @delete="requestDelete"
           @rename="onRename"
           @up="openDir(currentParent)"

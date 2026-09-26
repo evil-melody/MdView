@@ -19,6 +19,46 @@ export const readOfficeMd = (path: string) =>
 export const writeOfficeMd = (path: string, md: string) =>
   invoke<boolean>('write_office_md', { path, md })
 
+/** PPTX 懒加载：全部幻灯片标题（缩略图 / 分页用，不含图片字节） */
+export const readPptxOutline = (path: string) =>
+  invoke<string[]>('read_pptx_outline', { path })
+
+/** PPTX 懒加载：单张幻灯片（样式 HTML + 图片 data URI） */
+export const readPptxSlide = (
+  path: string,
+  index: number
+) =>
+  invoke<{ index: number; title: string; text: string; html: string }>(
+    'read_pptx_slide',
+    { path, index }
+  )
+
+/** PPTX 图片替换：按 slide_index + rId 把原始图片字节写回 pptx 文件 */
+export const replacePptxImage = (
+  path: string,
+  slideIndex: number,
+  rid: string,
+  imageBytes: number[]
+) =>
+  invoke<boolean>('replace_pptx_image', { path, slideIndex, rid, imageBytes })
+
+/** PPTX 文字更新：直接修改指定幻灯片指定 shape 的文本 */
+export const updatePptxText = (
+  path: string,
+  slideIndex: number,
+  shapeIndex: number,
+  text: string
+) =>
+  invoke<boolean>('update_pptx_text', { path, slideIndex, shapeIndex, text })
+
+/** DOCX 后端渲染 HTML（标题/样式/表格/图片 data URI），替代前端 mammoth */
+export const readDocxHtml = (path: string) =>
+  invoke<string>('read_docx_html', { path })
+
+/** 读取文件原始字节数组（自 InspireLoom 移植：替代 base64 IPC） */
+export const readFileBytes = (path: string) =>
+  invoke<number[]>('read_file_as_bytes', { path })
+
 /** office 原生编辑保存：前端组件导出的二进制（docx/xlsx）base64 落盘 */
 export const writeBinaryBase64 = (path: string, contents: string) =>
   invoke<boolean>('write_binary_base64', { path, contents })

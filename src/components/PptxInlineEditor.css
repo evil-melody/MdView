@@ -1,0 +1,125 @@
+.ppte {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.ppte-toolbar {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.ppte-preview {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 24px;
+  background: var(--bg-1, #f5f6f8);
+}
+
+.ppte-slide {
+  margin-bottom: 20px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 8px);
+  overflow: hidden;
+}
+
+.ppte-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.ppte-no {
+  font-size: 11px;
+  color: var(--accent);
+  font-weight: 700;
+  background: var(--accent-soft);
+  padding: 2px 8px;
+  border-radius: 99px;
+}
+
+.ppte-title {
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.ppte-canvas {
+  position: relative;
+  width: 100%;
+  padding-bottom: 56.25%;
+  background: var(--bg-1, #f5f6f8);
+  overflow: hidden;
+}
+
+.ppte-canvas :deep(.px-canvas) {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.ppte-canvas :deep(.px-shape) {
+  position: absolute;
+  cursor: text;
+  outline: none;
+  min-height: 1em;
+}
+
+.ppte-canvas :deep(.px-shape:focus),
+.ppte-canvas :deep(.px-shape:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.ppte-canvas :deep(.px-shape:empty::before) {
+  content: '点击输入文字';
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.ppte-canvas :deep(.px-img) {
+  cursor: pointer;
+}
+
+.ppte-canvas :deep(.px-img:hover) {
+  outline: 2px solid var(--accent);
+}
+
+.ppte-loading,
+.ppte-error,
+.ppte-saving {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.ppte-error {
+  color: var(--red, #ef4444);
+}
+
+.ppte-saving {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  padding: 6px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 8px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  pointer-events: none;
+}

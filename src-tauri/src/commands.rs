@@ -1,6 +1,7 @@
 use chrono::{DateTime, Local};
 use serde::Serialize;
 use std::fs;
+use std::io::{Cursor, Write};
 use std::path::Path;
 
 use crate::config::{load_config, save_config, AppConfig, ChatMessage};
@@ -130,7 +131,7 @@ pub fn toggle_devtools(window: tauri::WebviewWindow) {
     }
 }
 
-/// docx / xlsx / xls -> Markdown（Markdown 枢纽编辑，自 InspireLoom office.rs 移植）
+/// docx / xlsx / xls / pptx -> Markdown（Markdown 枢纽编辑，自 InspireLoom office.rs 移植）
 #[tauri::command]
 pub fn read_office_md(path: String) -> Result<String, String> {
     let data = fs::read(&path).map_err(|e| e.to_string())?;
@@ -142,11 +143,26 @@ pub fn read_office_md(path: String) -> Result<String, String> {
     match ext.as_str() {
         "docx" => crate::office::docx_to_md(&data),
         "xlsx" | "xls" => crate::office::xlsx_to_md(&data),
+        "pptx" => crate::office::pptx_to_md(&data),
         _ => Err(format!("不支持的编辑格式: {ext}")),
     }
 }
 
-/// Markdown 写回 docx / xlsx
+/// docx -> HTML（后端渲染预览，替代前端 mammoth；对 WPS 产物更稳、大文件更快）
+#[tauri::command]
+pub fn read_docx_html(path: String) -> Result<String, String> {
+    let data = fs::read(&path).map_err(|e| e.to_string())?;
+    crate::office::docx_to_html(&data)
+}
+
+/// 读取文件为字节数组（自 InspireLoom file_io.rs 移植：替代 base64 IPC，
+/// 前端 canvas-editor / SheetJS 等直接 new Uint8Array(bytes).buffer 使用）
+#[tauri::command]
+pub async fn read_file_as_bytes(path: String) -> Result<Vec<u8>, String> {
+    fs::read(&path).map_err(|e| e.to_string())
+}
+
+/// Markdown 写回 docx / xlsx / pptx
 #[tauri::command]
 pub fn write_office_md(path: String, md: String) -> Result<bool, String> {
     let ext = Path::new(&path)
@@ -154,12 +170,86 @@ pub fn write_office_md(path: String, md: String) -> Result<bool, String> {
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
+    // 读回原始字节，仅 pptx 写回时用于图片原位回填（docx/xlsx 忽略）
+    let data = fs::read(&path).map_err(|e| e.to_string())?;
     let bytes = match ext.as_str() {
         "docx" => crate::office::md_to_docx(&md)?,
         "xlsx" => crate::office::md_to_xlsx(&md)?,
+        "pptx" => crate::office::md_to_pptx(&md, &data)?,
         _ => return Err(format!("不支持的写入格式: {ext}")),
     };
     fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// PPTX 懒加载：返回各幻灯片标题（便宜，不含图片字节），供前端缩略图 / 分页。
+#[tauri::command]
+pub fn read_pptx_outline(path: String) -> Result<Vec<String>, String> {
+    let data = fs::read(&path).map_err(|e| e.to_string())?;
+    crate::office::pptx_outline(&data)
+}
+
+/// PPTX 懒加载：按索引返回单张幻灯片（样式 HTML + 图片 data URI）。
+/// 仅该页图片进入内存，支持 130MB+ 大文件渐进渲染。
+#[tauri::command]
+pub fn read_pptx_slide(path: String, index: usize) -> Result<crate::office::PptxSlideData, String> {
+    let data = fs::read(&path).map_err(|e| e.to_string())?;
+    crate::office::pptx_slide_data(&data, index)
+}
+
+/// 替换 PPTX 中指定幻灯片的某张图片（按 rId），并就地写回文件。
+/// 仅改写目标媒体文件，其余条目通过 zip raw_copy 保留，避免大文件全量解压重排。
+#[tauri::command]
+pub fn replace_pptx_image(
+    path: String,
+    slide_index: usize,
+    rid: String,
+    image_bytes: Vec<u8>,
+) -> Result<bool, String> {
+    let data = fs::read(&path).map_err(|e| e.to_string())?;
+    let mut zip_in = zip::ZipArchive::new(Cursor::new(data.as_slice()))
+        .map_err(|e| format!("PPTX 读取失败：{e}"))?;
+    let rels_name = format!("ppt/slides/_rels/slide{}.xml.rels", slide_index + 1);
+    let rels = crate::office::read_rels(&mut zip_in, &rels_name)
+        .map_err(|e| format!("读取 slide rels 失败：{e}"))?;
+    let target = rels.get(&rid).ok_or("找不到该图片的关系 ID")?;
+    let media_path = crate::office::resolve_target("ppt/slides", target);
+    if !media_path.starts_with("ppt/media/") {
+        return Err("无效的图片路径".to_string());
+    }
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut zip_out = zip::write::ZipWriter::new(Cursor::new(&mut buf));
+        let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for i in 0..zip_in.len() {
+            let file = zip_in.by_index(i).map_err(|e| e.to_string())?;
+            if file.name() == media_path {
+                zip_out
+                    .start_file(media_path.clone(), opts)
+                    .map_err(|e| e.to_string())?;
+                zip_out.write_all(&image_bytes).map_err(|e| e.to_string())?;
+            } else {
+                zip_out.raw_copy_file(file).map_err(|e| e.to_string())?;
+            }
+        }
+        zip_out.finish().map_err(|e| e.to_string())?;
+    }
+    fs::write(&path, &buf).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// 更新 PPTX 指定幻灯片中指定 shape 的文本，就地写回文件。
+#[tauri::command]
+pub fn update_pptx_text(
+    path: String,
+    slide_index: usize,
+    shape_index: usize,
+    text: String,
+) -> Result<bool, String> {
+    let data = fs::read(&path).map_err(|e| e.to_string())?;
+    let out = crate::office::update_pptx_text(&data, slide_index, shape_index, &text)?;
+    fs::write(&path, &out).map_err(|e| e.to_string())?;
     Ok(true)
 }
 

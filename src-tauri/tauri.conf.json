@@ -32,16 +32,14 @@
   },
   "bundle": {
     "active": true,
+    "targets": ["dmg", "app", "msi"],
     "macOS": {
-      "signingIdentity": "-",
-      "targets": ["dmg", "app"]
-    },
-    "windows": {
-      "targets": ["msi"]
+      "signingIdentity": "-"
     },
     "fileAssociations": [
       { "ext": ["md", "markdown", "mdx"], "name": "Markdown 文档", "role": "Editor", "mimeType": "text/markdown" },
-      { "ext": ["txt"], "name": "文本文档", "role": "Editor", "mimeType": "text/plain" }
+      { "ext": ["txt"], "name": "文本文档", "role": "Editor", "mimeType": "text/plain" },
+      { "ext": ["pptx"], "name": "演示文稿", "role": "Editor" }
     ],
     "icon": [
       "icons/32x32.png",
