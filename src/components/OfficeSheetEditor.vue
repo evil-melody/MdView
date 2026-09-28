@@ -8,6 +8,7 @@ import {
 } from '@univerjs/presets'
 import { UniverSheetsCorePreset } from '@univerjs/preset-sheets-core'
 import { UniverSheetsDrawingPreset } from '@univerjs/preset-sheets-drawing'
+import { ICommandService } from '@univerjs/core'
 import SheetsCoreZhCN from '@univerjs/preset-sheets-core/locales/zh-CN'
 import SheetsDrawingZhCN from '@univerjs/preset-sheets-drawing/locales/zh-CN'
 import '@univerjs/preset-sheets-core/lib/index.css'
@@ -27,6 +28,7 @@ const containerRef = ref<HTMLDivElement | null>(null)
 const errText = ref('')
 let univer: any = null
 let fUniver: any = null
+let commandServiceDispose: { dispose?: () => void } | null = null
 /** xlsx 内嵌图片（over-grid），保存时原样写回，避免丢图 */
 const pendingImages: SheetEmbeddedImage[] = []
 
@@ -92,7 +94,17 @@ onMounted(async () => {
       },
       theme: defaultTheme,
       presets: [
-        UniverSheetsCorePreset({ container: containerRef.value }),
+        UniverSheetsCorePreset({
+          container: containerRef.value,
+          // header 必须为 true：Univer 1.0 的工具栏（ribbon）挂在 header 下，
+          // header:false 会把工具栏+公式栏一起关掉
+          header: true,
+          toolbar: true,
+          ribbonType: 'grid',
+          formulaBar: true,
+          footer: { sheetBar: true, statisticBar: true, menus: true, zoomSlider: true },
+          contextMenu: true
+        }),
         UniverSheetsDrawingPreset()
       ]
     })
@@ -104,7 +116,8 @@ onMounted(async () => {
 
     // 任意命令执行（编辑操作）→ 脏态
     try {
-      univer.onCommandExecuted(() => emit('change'))
+      const commandService = univer.__getInjector().get(ICommandService)
+      commandServiceDispose = commandService.onCommandExecuted(() => emit('change'))
     } catch (_) {
       /* ignore */
     }
@@ -120,12 +133,18 @@ onMounted(async () => {
 
 onUnmounted(() => {
   try {
+    commandServiceDispose?.dispose?.()
+  } catch (_) {
+    /* ignore */
+  }
+  try {
     univer?.dispose?.()
   } catch (_) {
     /* ignore */
   }
   univer = null
   fUniver = null
+  commandServiceDispose = null
 })
 
 /** 导出当前工作簿为 xlsx base64 */

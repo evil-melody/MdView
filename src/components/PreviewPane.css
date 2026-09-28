@@ -236,6 +236,71 @@
   position: relative;
 }
 
+/* Univer 编辑器报错浮层：不影响布局，报错时置顶可见原因 + 重试 */
+.editor-alert {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: #401d21;
+  color: #ffc9c9;
+  border-bottom: 1px solid #7a2f36;
+  font-size: 12px;
+}
+
+.editor-alert .ea-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-alert .ea-btn {
+  padding: 2px 10px;
+  border: 1px solid #7a2f36;
+  border-radius: 5px;
+  background: #551f25;
+  color: #ffd8d8;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.editor-alert .ea-btn:hover {
+  background: #6b2730;
+}
+
+/* 动态加载 Univer / Sheet 编辑器时的占位，避免编辑页短暂空白 */
+.editor-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2, #9ca3af);
+  font-size: 13px;
+}
+
+/* 代码 / 配置类文件只读预览：等宽保留空白，避免被 Markdown 管道乱渲染 */
+.code-view {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 14px 18px;
+  overflow: auto;
+  background: #16161b;
+  color: #d6d6de;
+  font-family: Menlo, Monaco, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre;
+  tab-size: 4;
+}
+
 .flex1 {
   flex: 1;
   min-width: 0;

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, defineAsyncComponent, h } from 'vue'
 import type { FileEntry, ViewTab } from '../types'
 import type { OpenTab } from '../store'
 import type { MarkdownHeading } from '../utils/markdown'
@@ -7,10 +7,11 @@ import MdPreview from './MdPreview.vue'
 import MindmapView from './MindmapView.vue'
 import BinaryViewer from './BinaryViewer.vue'
 import OfficeDocInlineEditor from './OfficeDocInlineEditor.vue'
-import OfficeSheetEditor from './OfficeSheetEditor.vue'
 import PptxInlineEditor from './PptxInlineEditor.vue'
+import CodeEditor from './CodeEditor.vue'
 import FileIcon from './FileIcon.vue'
 import { viewerTypeFor, officeEditable } from '../utils/viewer'
+import { isCodeFile } from '../utils/codeLang'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import type { TabViewer } from '../store'
 
@@ -38,24 +39,31 @@ const emit = defineEmits<{
 
 const tab = ref<ViewTab>('preview')
 const outlineOpen = ref(false)
+watch(
+  () => props.entry?.path,
+  () => {
+    editorErr.value = ''
+  }
+)
 
-/** 文本类 + docx/xlsx（Markdown 枢纽往返编辑）可编辑 */
+/** 文本类 + docx/xlsx/pptx 可编辑；未知扩展名（other）与 csv/tsv 也按文本尝试编辑 */
 const canEdit = computed(() => {
   if (!props.entry) return false
-  if (['markdown', 'text', 'config', 'code'].includes(props.entry.kind)) return true
+  if (['markdown', 'text', 'config', 'code', 'other'].includes(props.entry.kind)) return true
+  if (isCsvLike.value) return true
   return officeEditable(props.entry)
 })
 
 /**
- * 纯只读预览类（图片/PDF/音视频/pptx）——走 BinaryViewer，不显示编辑/保存。
- * docx/xlsx 虽由 viewerTypeFor 识别，但支持 Markdown 枢纽往返编辑，故排除在外。
+ * 纯只读预览类（图片/PDF/音视频）——走 BinaryViewer，不显示编辑/保存。
+ * docx/xlsx/pptx 支持编辑，故排除在外。
  */
 const isViewerKind = computed(() => {
   const v = viewerTypeFor(props.entry)
   return v !== null && !officeEditable(props.entry)
 })
 
-/** docx/xlsx/pptx：预览态复用 BinaryViewer 富渲染，编辑态走对应编辑器 */
+/** docx/xlsx/pptx：预览/编辑走各自编辑器 */
 const isOffice = computed(() => officeEditable(props.entry))
 const isDocx = computed(
   () => (props.entry?.ext || '').toLowerCase() === 'docx'
@@ -63,6 +71,30 @@ const isDocx = computed(
 const isPptx = computed(
   () => (props.entry?.ext || '').toLowerCase() === 'pptx'
 )
+/** csv/tsv：预览走表格渲染，编辑走文本（CodeEditor），保留原格式 */
+const isCsvLike = computed(() => {
+  const ext = (props.entry?.ext || '').toLowerCase()
+  return ext === 'csv' || ext === 'tsv'
+})
+
+/**
+ * xlsx 编辑器懒加载：避免 SheetJS 首屏 chunk 阻塞。
+ */
+const EditorLoading = () => h('div', { class: 'editor-loading' }, '编辑器加载中…')
+const OfficeSheetEditor = defineAsyncComponent({
+  loader: () => import('./OfficeSheetEditor.vue'),
+  loadingComponent: EditorLoading,
+  delay: 150
+})
+
+/** 代码 / 配置类文件（shell、toml、xml、json、yaml、ini…）走 CodeMirror 编辑器；
+ *  未知扩展名（kind=other）兜底按纯文本处理，避免被当 Markdown 乱渲染 */
+const isCode = computed(
+  () => isCodeFile(props.entry) || props.entry?.kind === 'other'
+)
+
+/** 代码类文件预览区的只读展示（等宽、保留空白，避免被当 Markdown 乱渲染） */
+const codePreview = computed(() => (isCode.value ? props.content : ''))
 
 /** html/htm：预览走原生 webview 渲染（asset 协议 iframe），不走 Markdown 管道 */
 const isHtml = computed(
@@ -71,8 +103,6 @@ const isHtml = computed(
 const htmlSrc = computed(() =>
   isHtml.value && props.entry ? convertFileSrc(props.entry.path) : ''
 )
-
-const editableTypes = ['markdown', 'text', 'config', 'code']
 
 function selectTab(t: ViewTab) {
   if (t !== 'mindmap' && !canEdit.value && t !== 'preview') return
@@ -88,23 +118,34 @@ function scrollTo(id: string) {
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
-/** office 编辑器实例（docx/xlsx 二选一），供保存时导出原生二进制 */
+/** xlsx 编辑器实例，供保存时导出原生二进制 */
 const officeRef = ref<any>(null)
 
-/** docx 内联编辑器（预览同款渲染 + contenteditable）失败标记：回退 Markdown 枢纽编辑 */
-const docxEditorFailed = ref(false)
-watch(
-  () => props.entry?.path,
-  () => {
-    docxEditorFailed.value = false
-  }
-)
-
+/** 保存时取回编辑器内容：仅 xlsx 走原生 base64，docx/pptx 已实时同步 */
 async function exportOffice(): Promise<string | null> {
-  return (await officeRef.value?.exportBase64?.()) ?? null
+  if (!isDocx.value) {
+    return (await officeRef.value?.exportBase64?.()) ?? null
+  }
+  return null
 }
 
-defineExpose({ exportOffice })
+/** 编辑器报错文案：明确展示原因便于定位 */
+const editorErr = ref('')
+
+function onDocEditorError(msg: string) {
+  editorErr.value = msg
+}
+
+function dismissEditorError() {
+  editorErr.value = ''
+}
+
+/** pptx 自动保存由 PptxInlineEditor 在失焦时完成；保存按钮仅清脏标记 */
+async function commitPptx(): Promise<boolean> {
+  return true
+}
+
+defineExpose({ exportOffice, commitPptx })
 </script>
 
 <template>
@@ -166,15 +207,25 @@ defineExpose({ exportOffice })
       </div>
     </div>
 
+    <div v-if="editorErr" class="editor-alert">
+      <span class="ea-text" :title="editorErr">编辑器异常：{{ editorErr }}</span>
+      <button class="ea-btn" @click="dismissEditorError">关闭</button>
+    </div>
+
     <div class="pane-body">
-      <!-- 图片 / PDF / 音视频 / office 文档 -->
+      <!-- 图片 / PDF / 音视频 -->
       <BinaryViewer v-if="isViewerKind" :entry="entry" :viewer="viewer" />
 
       <template v-else-if="canEdit">
         <div class="content-area">
           <div v-if="tab === 'preview'" class="flex1">
-            <!-- docx/xlsx：富渲染预览（mammoth / SheetJS），编辑在「编辑」页签 -->
-            <BinaryViewer v-if="isOffice" :entry="entry" :viewer="viewer" />
+            <!-- docx/xlsx：富渲染预览（vue-files-preview） -->
+            <BinaryViewer v-if="isOffice && !isPptx" :entry="entry" :viewer="viewer" />
+            <!-- pptx：预览与编辑同款渲染（vue-files-preview 在该场景下易卡死，故用同款 HTML） -->
+            <PptxInlineEditor
+              v-else-if="isPptx"
+              :path="entry!.path"
+            />
             <!-- html：原生 webview 渲染（浏览器方式，脚本/相对资源照常加载） -->
             <iframe
               v-else-if="isHtml"
@@ -182,26 +233,29 @@ defineExpose({ exportOffice })
               :src="htmlSrc"
               :title="entry?.name || 'HTML 预览'"
             ></iframe>
-            <MdPreview v-else :content="content" :dirty="dirty" :base-path="basePath" />
+            <MdPreview v-else-if="!isCode" :content="content" :dirty="dirty" :base-path="basePath" />
+            <pre v-else class="code-view scrollable">{{ codePreview }}</pre>
           </div>
           <div v-else-if="tab === 'edit' && isOffice" class="flex1">
-            <!-- docx：预览同款渲染 + contenteditable 就地编辑（turndown 同步回 Markdown） -->
+            <!-- docx：预览同款 HTML 渲染 + contenteditable + 工具栏 -->
             <OfficeDocInlineEditor
-              v-if="isDocx && !docxEditorFailed"
+              v-if="isDocx"
               :key="entry!.path"
               :src="convertFileSrc(entry!.path)"
               @change="emit('dirty')"
               @update:content="(v: string) => emit('update:content', v)"
-              @error="docxEditorFailed = true"
+              @error="onDocEditorError"
             />
-            <textarea
-              v-else-if="isDocx"
-              class="editor scrollable full"
-              :value="content"
-              @input="emit('update:content', ($event.target as HTMLTextAreaElement).value)"
-              spellcheck="false"
-            ></textarea>
-            <!-- xlsx：Univer 表格编辑器 -->
+            <!-- csv/tsv：文本方式编辑（CodeEditor），保存直接写回原文件 -->
+            <CodeEditor
+              v-else-if="isCsvLike"
+              :key="entry!.path"
+              :content="content"
+              :path="entry!.path"
+              @change="emit('dirty')"
+              @update:content="(v: string) => emit('update:content', v)"
+            />
+            <!-- xlsx：原生表格编辑器 -->
             <OfficeSheetEditor
               v-else-if="!isPptx"
               ref="officeRef"
@@ -209,11 +263,21 @@ defineExpose({ exportOffice })
               :path="entry!.path"
               @change="emit('dirty')"
             />
-            <!-- pptx：在预览渲染层上直接编辑文字 / 点击图片替换 -->
+            <!-- pptx：与预览同款渲染，支持文字失焦保存 / 图片替换 -->
             <PptxInlineEditor
               v-else
               :path="entry!.path"
               @change="emit('dirty')"
+            />
+          </div>
+          <!-- 代码 / 配置类：CodeMirror 高亮编辑器（语法高亮 + Tab 缩进 + 查找） -->
+          <div v-else-if="tab === 'edit' && isCode" class="flex1">
+            <CodeEditor
+              :key="entry!.path"
+              :content="content"
+              :path="entry!.path"
+              @change="emit('dirty')"
+              @update:content="(v: string) => emit('update:content', v)"
             />
           </div>
           <div v-else-if="tab === 'edit' && isHtml" class="flex1">

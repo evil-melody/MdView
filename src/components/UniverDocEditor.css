@@ -1,0 +1,72 @@
+.udx {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 工具栏：固定在顶部，不随文档滚动 */
+.udx-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border, #e3e3e6);
+  background: var(--bg-elevated, #fafafa);
+  flex: none;
+}
+
+.udx-btn {
+  min-width: 28px;
+  height: 26px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text, #1f1f22);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.udx-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+.udx-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.udx-sel {
+  height: 26px;
+  max-width: 96px;
+  padding: 0 4px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 5px;
+  background: #fff;
+  font-size: 12px;
+}
+
+.udx-color {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 5px;
+  background: #fff;
+  cursor: pointer;
+}
+
+/* Univer 挂载点：撑满剩余高度，滚动由 Univer 自身处理 */
+.udx-host {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}

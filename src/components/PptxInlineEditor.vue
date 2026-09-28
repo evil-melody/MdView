@@ -124,12 +124,44 @@ async function replaceImage(slideIndex: number, rid: string) {
 
 onMounted(loadSlides)
 watch(() => props.path, loadSlides)
+
+/** 幻灯片文字格式工具栏：execCommand 作用于当前聚焦的 shape（contenteditable） */
+function exec(cmd: string, value?: string) {
+  try {
+    document.execCommand('styleWithCSS', false, 'true')
+    document.execCommand(cmd, false, value)
+    emit('change')
+  } catch (e) {
+    console.warn('[PptxInlineEditor] execCommand failed', cmd, e)
+  }
+}
 </script>
 
 <template>
   <div class="ppte">
     <div class="ppte-toolbar">
-      点击幻灯片文字直接编辑，点击图片替换；按 Esc 或点击空白处失焦即保存
+      <div class="ppte-tools">
+        <button class="pt-btn" title="撤销" @mousedown.prevent @click="exec('undo')">↶</button>
+        <button class="pt-btn" title="重做" @mousedown.prevent @click="exec('redo')">↷</button>
+        <span class="pt-sep"></span>
+        <button class="pt-btn" title="加粗" @mousedown.prevent @click="exec('bold')"><b>B</b></button>
+        <button class="pt-btn" title="斜体" @mousedown.prevent @click="exec('italic')"><i>I</i></button>
+        <button class="pt-btn" title="下划线" @mousedown.prevent @click="exec('underline')"><u>U</u></button>
+        <button class="pt-btn" title="删除线" @mousedown.prevent @click="exec('strikeThrough')">S</button>
+        <input
+          class="pt-color"
+          type="color"
+          title="字体颜色"
+          @mousedown.prevent
+          @input="exec('foreColor', ($event.target as HTMLInputElement).value)"
+        />
+        <button class="pt-btn" title="清除格式" @mousedown.prevent @click="exec('removeFormat')">⌫</button>
+        <span class="pt-sep"></span>
+        <button class="pt-btn" title="左对齐" @mousedown.prevent @click="exec('justifyLeft')">⇤</button>
+        <button class="pt-btn" title="居中" @mousedown.prevent @click="exec('justifyCenter')">⇔</button>
+        <button class="pt-btn" title="右对齐" @mousedown.prevent @click="exec('justifyRight')">⇥</button>
+      </div>
+      <span class="ppte-hint">点击幻灯片文字直接编辑，点击图片替换；按 Esc 或点击空白处失焦即保存</span>
     </div>
     <div class="ppte-preview" @blur.capture="onBlur" @click="onImageClick">
       <div v-if="loading" class="ppte-loading">加载幻灯片预览中…</div>

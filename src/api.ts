@@ -33,6 +33,10 @@ export const readPptxSlide = (
     { path, index }
   )
 
+/** PPTX -> Univer 幻灯片数据（slides 画布编辑器加载用，含 element→shape 写回清单） */
+export const readPptxUniver = (path: string) =>
+  invoke<string>('read_pptx_univer', { path })
+
 /** PPTX 图片替换：按 slide_index + rId 把原始图片字节写回 pptx 文件 */
 export const replacePptxImage = (
   path: string,
@@ -54,6 +58,10 @@ export const updatePptxText = (
 /** DOCX 后端渲染 HTML（标题/样式/表格/图片 data URI），替代前端 mammoth */
 export const readDocxHtml = (path: string) =>
   invoke<string>('read_docx_html', { path })
+
+/** DOCX -> Univer DocumentData JSON（@univerjs/docs 富文本编辑器加载用） */
+export const readDocxUniver = (path: string) =>
+  invoke<string>('read_docx_univer', { path })
 
 /** 读取文件原始字节数组（自 InspireLoom 移植：替代 base64 IPC） */
 export const readFileBytes = (path: string) =>

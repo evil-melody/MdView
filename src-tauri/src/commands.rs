@@ -98,7 +98,16 @@ pub fn scan_directory(path: String) -> Result<Vec<FileEntry>, String> {
 
 #[tauri::command]
 pub fn read_text(path: String) -> Result<String, String> {
-    fs::read_to_string(&path).map_err(|e| e.to_string())
+    let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+    // 含 NULL 字节视为二进制文件，避免预览出乱码
+    if bytes.contains(&0) {
+        return Err("二进制文件，不支持文本预览".to_string());
+    }
+    // 非 UTF-8（GBK 日志等）降级 lossy 读取，保证能预览
+    match String::from_utf8(bytes) {
+        Ok(s) => Ok(s),
+        Err(e) => Ok(String::from_utf8_lossy(e.as_bytes()).to_string()),
+    }
 }
 
 /// 读取二进制文件，base64 编码返回（前端 mammoth / SheetJS / fflate 解析 docx/xlsx/pptx 用）
@@ -155,6 +164,13 @@ pub fn read_docx_html(path: String) -> Result<String, String> {
     crate::office::docx_to_html(&data)
 }
 
+/// DOCX -> Univer DocumentData（JSON 串），供 @univerjs/docs 富文本编辑器加载。
+#[tauri::command]
+pub fn read_docx_univer(path: String) -> Result<String, String> {
+    let data = fs::read(&path).map_err(|e| e.to_string())?;
+    crate::office::docx_to_univer(&data)
+}
+
 /// 读取文件为字节数组（自 InspireLoom file_io.rs 移植：替代 base64 IPC，
 /// 前端 canvas-editor / SheetJS 等直接 new Uint8Array(bytes).buffer 使用）
 #[tauri::command]
@@ -195,6 +211,14 @@ pub fn read_pptx_outline(path: String) -> Result<Vec<String>, String> {
 pub fn read_pptx_slide(path: String, index: usize) -> Result<crate::office::PptxSlideData, String> {
     let data = fs::read(&path).map_err(|e| e.to_string())?;
     crate::office::pptx_slide_data(&data, index)
+}
+
+/// PPTX -> Univer 幻灯片数据（JSON 串），供 @univerjs/slides 画布编辑器加载。
+/// 附带 manifest：elementId -> (slideIndex, shapeIndex) 写回索引。
+#[tauri::command]
+pub fn read_pptx_univer(path: String) -> Result<String, String> {
+    let data = fs::read(&path).map_err(|e| e.to_string())?;
+    crate::office::pptx_to_univer(&data)
 }
 
 /// 替换 PPTX 中指定幻灯片的某张图片（按 rId），并就地写回文件。

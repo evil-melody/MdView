@@ -10,11 +10,72 @@
 
 .ppte-toolbar {
   flex-shrink: 0;
-  padding: 8px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
   font-size: 12px;
   color: var(--text-2);
   background: var(--panel-2);
   border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.ppte-toolbar::-webkit-scrollbar {
+  display: none;
+}
+
+.ppte-tools {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.pt-btn {
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pt-btn:hover {
+  background: var(--panel);
+  color: var(--text);
+}
+
+.pt-color {
+  width: 26px;
+  height: 26px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.pt-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+.ppte-hint {
+  flex-shrink: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ppte-preview {

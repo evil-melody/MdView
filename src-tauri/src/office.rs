@@ -1,3 +1,6 @@
+// Univer 数据模型的字段名是驼峰（dataStream / startIndex / pageElements…），保持原样以便整除。
+#![allow(non_snake_case)]
+
 /*
  * Office 家族转换（纯 Rust，自 InspireLoom services/format_convert/office.rs 移植）：
  *   docx 读 -> md；md 写 -> docx
@@ -518,6 +521,282 @@ fn sniff_image_mime(bytes: &[u8]) -> &'static str {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// DOCX -> Univer DocumentData（JSON 串）
+// 供前端 @univerjs/docs 富文本编辑器加载（自带工具栏）。
+// 段落分隔符用 \r（Univer 正文流的段落标记），行内样式进 textRuns。
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Serialize)]
+struct UxTextStyle {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bl: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    it: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ul: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fs: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cl: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct UxTextRun {
+    st: usize,
+    ed: usize,
+    ts: UxTextStyle,
+}
+
+#[derive(Serialize)]
+struct UxParagraphStyle {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    horizontalAlign: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    namedStyleType: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct UxParagraph {
+    startIndex: usize,
+    paragraphId: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    paragraphStyle: Option<UxParagraphStyle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bullet: Option<serde_json::Value>,
+    textRuns: Vec<UxTextRun>,
+}
+
+#[derive(Serialize)]
+struct UxBody {
+    dataStream: String,
+    paragraphs: Vec<UxParagraph>,
+    textRuns: Vec<UxTextRun>,
+}
+
+#[derive(Serialize)]
+struct UxDocumentStyle {
+    pageSize: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct UxDocument {
+    id: String,
+    locale: String,
+    body: UxBody,
+    documentStyle: UxDocumentStyle,
+}
+
+fn ux_align(v: Option<&str>) -> Option<u32> {
+    match v {
+        Some("center") => Some(2),
+        Some("right") => Some(3),
+        Some("both") | Some("justify") => Some(4),
+        Some("left") => Some(1),
+        _ => None,
+    }
+}
+
+/// w:pStyle 里解析出的 Heading 级别（1..=6）。
+fn ux_heading(style: Option<&str>) -> Option<u32> {
+    let s = style?;
+    (1..=6).find(|l| s.contains(&format!("Heading{l}"))).map(|l| 4 + l as u32 - 1)
+}
+
+/// 表格一行 -> " | a | b |"，供编辑器内按 Markdown 表格行展示。
+fn ux_table_row(row: &[DxCell]) -> String {
+    let cells: Vec<String> = row
+        .iter()
+        .map(|c| {
+            c.paras
+                .iter()
+                .map(|p| p.runs.iter().map(|r| r.text.as_str()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join(" ")
+                .trim()
+                .to_string()
+        })
+        .collect();
+    format!("| {} |", cells.join(" | "))
+}
+
+/// DOCX -> Univer DocumentData JSON（富文本编辑器可直接加载）。
+pub fn docx_to_univer(input: &[u8]) -> Result<String, String> {
+    let doc_xml = read_docx_part(input, "word/document.xml")?;
+    let blocks = parse_docx_document(&doc_xml);
+    // 图片只用于校验 rels 可解析性；正文流暂不内嵌（编辑器 v1 不含图片 drawing）
+    let mut _uris: HashMap<String, String> = HashMap::new();
+    {
+        let mut zip = zip::ZipArchive::new(Cursor::new(input))
+            .map_err(|e| format!("DOCX 读取失败：{e}"))?;
+        let rels = read_rels(&mut zip, "word/_rels/document.xml.rels").unwrap_or_default();
+        for rid in collect_embed_ids(&doc_xml) {
+            if let Some(target) = rels.get(&rid) {
+                let media = resolve_target("word", target);
+                if let Ok(mut f) = zip.by_name(&media) {
+                    let mut bytes = Vec::new();
+                    if f.read_to_end(&mut bytes).is_ok() && !bytes.is_empty() {
+                        _uris.insert(
+                            rid.clone(),
+                            format!(
+                                "data:{};base64,{}",
+                                sniff_image_mime(&bytes),
+                                base64::engine::general_purpose::STANDARD.encode(&bytes)
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    let mut data_stream = String::new();
+    let mut paragraphs: Vec<UxParagraph> = Vec::new();
+    let mut global_runs: Vec<UxTextRun> = Vec::new();
+
+    for (idx, b) in blocks.iter().enumerate() {
+        match b {
+            DxBlock::Table(rows) => {
+                for row in rows {
+                    let line = ux_table_row(row);
+                    if line.trim_matches(|c| c == '|' || c == ' ').is_empty() {
+                        continue;
+                    }
+                    let start = data_stream.chars().count();
+                    data_stream.push_str(&line);
+                    data_stream.push('\r');
+                    paragraphs.push(UxParagraph {
+                        startIndex: start,
+                        paragraphId: format!("t{idx}n{}", paragraphs.len()),
+                        paragraphStyle: None,
+                        bullet: None,
+                        textRuns: Vec::new(),
+                    });
+                }
+                continue;
+            }
+            DxBlock::Para(p) => {
+                let anchor = data_stream.chars().count();
+                let (text, mut text_runs) = ux_para_runs(&p.runs);
+                if text.is_empty() {
+                    continue;
+                }
+                for tr in &mut text_runs {
+                    tr.st += anchor;
+                }
+                global_runs.extend(text_runs.clone());
+
+                let heading = ux_heading(p.style.as_deref());
+                let align = ux_align(p.algn.as_deref());
+                let paragraph_style = if heading.is_some() || align.is_some() {
+                    Some(UxParagraphStyle {
+                        horizontalAlign: align,
+                        namedStyleType: heading,
+                    })
+                } else {
+                    None
+                };
+                let bullet = if p.num {
+                    Some(serde_json::json!({"listType":"bullet","listId":"0","nestingLevel":0}))
+                } else {
+                    None
+                };
+
+                data_stream.push_str(&text);
+                data_stream.push('\r');
+                paragraphs.push(UxParagraph {
+                    startIndex: anchor,
+                    paragraphId: format!("p{idx}"),
+                    paragraphStyle: paragraph_style,
+                    bullet,
+                    textRuns: text_runs,
+                });
+            }
+        }
+    }
+
+    let doc = UxDocument {
+        id: "MdViewDoc".to_string(),
+        locale: "zh-CN".to_string(),
+        body: UxBody {
+            dataStream: data_stream,
+            paragraphs,
+            textRuns: global_runs,
+        },
+        documentStyle: UxDocumentStyle {
+            pageSize: serde_json::json!({"width":595,"height":842}),
+        },
+    };
+    serde_json::to_string(&doc).map_err(|e| format!("Univer 数据生成失败：{e}"))
+}
+
+/// 段内 run：合并连续同样式为一条 textRun，返回纯文本与样式区间。
+fn ux_para_runs(runs: &[DxRun]) -> (String, Vec<UxTextRun>) {
+    let mut text = String::new();
+    let mut out: Vec<UxTextRun> = Vec::new();
+    let mut group: Vec<&DxRun> = Vec::new();
+
+    let flush = |group: &mut Vec<&DxRun>, text: &mut String, out: &mut Vec<UxTextRun>| {
+        if let Some(first) = group.first() {
+            let st = text.chars().count();
+            for r in group.iter() {
+                text.push_str(&r.text);
+            }
+            let ed = text.chars().count();
+            out.push(UxTextRun {
+                st,
+                ed,
+                ts: build_ux_text_style(Some(first)),
+            });
+        }
+        group.clear();
+    };
+
+    for r in runs.iter().filter(|r| r.pic.is_none() && !r.text.is_empty()) {
+        if !group.is_empty() && ux_same_style(group[0], r) {
+            group.push(r);
+        } else {
+            flush(&mut group, &mut text, &mut out);
+            group.push(r);
+        }
+    }
+    flush(&mut group, &mut text, &mut out);
+    (text, out)
+}
+
+fn ux_same_style(a: &DxRun, b: &DxRun) -> bool {
+    a.bold == b.bold && a.italic == b.italic && a.underline == b.underline && a.sz == b.sz && a.color == b.color
+}
+
+impl UxTextStyle {
+    fn default_merged() -> Self {
+        Self {
+            bl: None,
+            it: None,
+            ul: None,
+            fs: None,
+            cl: None,
+        }
+    }
+}
+
+fn build_ux_text_style(run: Option<&DxRun>) -> UxTextStyle {
+    let Some(r) = run else {
+        return UxTextStyle::default_merged();
+    };
+    UxTextStyle {
+        bl: Some(if r.bold { 1 } else { 0 }),
+        it: Some(if r.italic { 1 } else { 0 }),
+        ul: if r.underline {
+            Some(serde_json::json!({"_type":1,"color":"#000000"}))
+        } else {
+            None
+        },
+        fs: r.sz.map(|s| (s as f64 / 2.0).round() as u32),
+        cl: r.color.as_deref().map(|c| format!("#{}", c)),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // DOCX 写（md -> docx）
@@ -1524,6 +1803,226 @@ pub fn pptx_slide_data(input: &[u8], index: usize) -> Result<PptxSlideData, Stri
         text: slide_plain_text(&slide),
         html: slide_to_html(&slide, &mut zip, &rels, sld_cx, sld_cy),
     })
+}
+
+// ---------------------------------------------------------------------------
+// PPTX -> Univer slides（JSON 串）
+// ---------------------------------------------------------------------------
+// element -> shape 的写回索引由 manifest 携带（slideIndex / shapeIndex 与
+// parse_pptx_slide 枚举顺序一致），保存时再按该索引调 update_pptx_text 写回 OOXML。
+
+/// 图片内联进 Univer 数据的总字节预算：超出的图片不再内联（避免整本演示文稿一次性把
+/// 上百兆媒体塞进一个 JSON），仅跳过渲染，不影响文本编辑与写回。
+const PX_INLINE_BUDGET: usize = 64 * 1024 * 1024;
+
+/// 按 rId 解析 ppt/media 下的图片 data URI（复用 slide_to_html 的解析逻辑）。
+fn px_media_uri(
+    zip: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    rels: &HashMap<String, String>,
+    rid: &str,
+) -> Option<(String, usize)> {
+    let target = rels.get(rid)?;
+    let base = Path::new(target).file_name()?;
+    let full = format!("ppt/media/{}", base.to_string_lossy());
+    let mut f = zip.by_name(&full).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    if buf.is_empty() {
+        return None;
+    }
+    let uri = format!(
+        "data:{};base64,{}",
+        mime_for_ext(&full),
+        base64::engine::general_purpose::STANDARD.encode(&buf)
+    );
+    Some((uri, buf.len()))
+}
+
+/// 段落对齐 -> Univer HorizontalAlign。
+fn px_univer_align(algn: Option<&str>) -> Option<u32> {
+    match algn {
+        Some("ctr") | Some("c") => Some(2),
+        Some("r") => Some(3),
+        Some("j") | Some("just") => Some(4),
+        _ => None,
+    }
+}
+
+/// 段内 run -> Univer textRuns（行内字号/颜色/粗斜体）。
+fn px_text_runs(p: &PxPara, base: usize) -> Vec<serde_json::Value> {
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    let mut off = base;
+    for r in &p.runs {
+        let st = off;
+        let n = r.text.chars().count();
+        off += n;
+        if n == 0 {
+            continue;
+        }
+        let mut ts = serde_json::Map::new();
+        if r.bold {
+            ts.insert("bl".into(), serde_json::json!(1));
+        }
+        if r.italic {
+            ts.insert("it".into(), serde_json::json!(1));
+        }
+        if let Some(sz) = r.sz {
+            // sz 百分之一磅 -> pt
+            ts.insert("fs".into(), serde_json::json!((sz as f64 / 100.0).round() as u32));
+        }
+        if let Some(c) = &r.color {
+            ts.insert("cl".into(), serde_json::json!(format!("#{c}")));
+        }
+        out.push(serde_json::json!({ "st": st, "ed": off, "ts": ts }));
+    }
+    out
+}
+
+/// 单个文本 shape -> Univer IDocumentData（挂到 richText.rich 渲染富文本）。
+fn px_rich_doc(sh: &PxShape, seq: usize) -> serde_json::Value {
+    let mut data_stream = String::new();
+    let mut paragraphs: Vec<serde_json::Value> = Vec::new();
+    for (i, p) in sh.paras.iter().enumerate() {
+        let start = data_stream.chars().count();
+        let text: String = p.runs.iter().map(|r| r.text.as_str()).collect();
+        data_stream.push_str(&text);
+        data_stream.push('\r');
+
+        let mut style = serde_json::Map::new();
+        if let Some(a) = px_univer_align(p.algn.as_deref()) {
+            style.insert("horizontalAlign".into(), serde_json::json!(a));
+        }
+        if p.bullet {
+            style.insert(
+                "bullet".into(),
+                serde_json::json!({"listType":"bullet","listId":"0","nestingLevel":0}),
+            );
+        }
+        if sh.anchor_ctr {
+            style.insert("verticalAlign".into(), serde_json::json!(2));
+        }
+        paragraphs.push(serde_json::json!({
+            "startIndex": start,
+            "paragraphId": format!("ps{seq}_{i}"),
+            "paragraphStyle": if style.is_empty() { serde_json::Value::Null } else { serde_json::json!(style) },
+            "textRuns": px_text_runs(p, start),
+        }));
+    }
+    serde_json::json!({
+        "id": format!("rich{seq}"),
+        "locale": "zhCN",
+        "body": { "dataStream": data_stream, "paragraphs": paragraphs },
+    })
+}
+
+/// PPTX -> Univer 幻灯片数据 JSON（含 element -> OOXML shape 的写回清单）。
+pub fn pptx_to_univer(input: &[u8]) -> Result<String, String> {
+    let mut zip = zip::ZipArchive::new(Cursor::new(input)).map_err(|e| format!("PPTX 读取失败：{e}"))?;
+    let names = pptx_slide_names(&mut zip)?;
+    let pres = read_zip_string(&mut zip, "ppt/presentation.xml").unwrap_or_default();
+    let (sld_cx, sld_cy) = parse_sld_sz(&pres);
+    let sx = if sld_cx > 0 { 960.0 / sld_cx as f64 } else { 960.0 / 12192000.0 };
+    let sy = if sld_cy > 0 { 540.0 / sld_cy as f64 } else { 540.0 / 6858000.0 };
+
+    let mut pages = serde_json::Map::new();
+    let mut page_order: Vec<String> = Vec::new();
+    let mut manifest: Vec<serde_json::Value> = Vec::new();
+    let mut inlined = 0usize;
+    let mut skipped_images = 0usize;
+
+    for (sidx, (num, name)) in names.iter().enumerate() {
+        let xml = read_zip_string(&mut zip, name)?;
+        let slide = parse_pptx_slide(&xml);
+        // 注意用 0 基下标：pptx_slide_names 的 num 是文件名里的 1 基编号，
+        // 直接 num + 1 会指向 slide2.xml.rels 导致图片全部丢失。
+        let rels_name = format!("ppt/slides/_rels/slide{}.xml.rels", sidx + 1);
+        let rels = read_rels(&mut zip, &rels_name).unwrap_or_default();
+        let page_id = format!("p{num}");
+
+        let bg = slide
+            .bg
+            .as_ref()
+            .map(|c| format!("#{}", c))
+            .unwrap_or_else(|| "#FFFFFF".to_string());
+        let mut page = serde_json::json!({
+            "id": page_id,
+            "pageType": 0,
+            "zIndex": 1,
+            "title": slide_title_text(&slide),
+            "description": "",
+            "pageBackgroundFill": { "rgb": bg },
+            "pageElements": {},
+        });
+        let elements = page["pageElements"].as_object_mut().expect("pageElements 对象");
+
+        let mut z = 1usize;
+        let mut eid = 0usize;
+        for (shape_index, sh) in slide.shapes.iter().enumerate() {
+            let (Some(x), Some(y), Some(w), Some(h)) = (sh.x, sh.y, sh.w, sh.h) else {
+                continue;
+            };
+            let element_id = format!("e{num}_{eid}");
+            eid += 1;
+            let el = serde_json::json!({
+                "id": element_id,
+                "zIndex": z,
+                "left": (x as f64 * sx).round(),
+                "top": (y as f64 * sy).round(),
+                "width": (w as f64 * sx).round(),
+                "height": (h as f64 * sy).round(),
+                "title": element_id.clone(),
+                "description": "",
+            });
+            z += 1;
+
+            if sh.is_pic {
+                match px_media_uri(&mut zip, &rels, &sh.pic_rid) {
+                    Some((uri, bytes)) if inlined + bytes <= PX_INLINE_BUDGET => {
+                        inlined += bytes;
+                        let mut full = el;
+                        full["type"] = serde_json::json!(1);
+                        full["image"] =
+                            serde_json::json!({ "imageProperties": { "contentUrl": uri } });
+                        elements.insert(element_id.clone(), full);
+                        manifest.push(serde_json::json!({
+                            "elementId": element_id,
+                            "slideIndex": sidx,
+                            "shapeIndex": shape_index,
+                            "kind": "pic",
+                            "rid": sh.pic_rid.clone(),
+                        }));
+                    }
+                    _ => skipped_images += 1,
+                }
+                continue;
+            }
+
+            let mut full = el;
+            full["type"] = serde_json::json!(2);
+            full["richText"] = serde_json::json!({ "rich": px_rich_doc(sh, shape_index) });
+            elements.insert(element_id.clone(), full);
+            manifest.push(serde_json::json!({
+                "elementId": element_id,
+                "slideIndex": sidx,
+                "shapeIndex": shape_index,
+                "kind": "text",
+            }));
+        }
+
+        page_order.push(page_id.clone());
+        pages.insert(page_id, page);
+    }
+
+    let out = serde_json::json!({
+        "id": "MdViewDeck",
+        "locale": "zhCN",
+        "title": "演示文稿",
+        "pageSize": { "width": 960, "height": 540 },
+        "body": { "pages": pages, "pageOrder": page_order },
+        "manifest": manifest,
+        "skippedImages": skipped_images,
+    });
+    serde_json::to_string(&out).map_err(|e| format!("Univer 幻灯片数据生成失败：{e}"))
 }
 
 /// 就地替换某张幻灯片中指定 shape 的文本（按 parse_pptx_slide 枚举的 shape 索引）。

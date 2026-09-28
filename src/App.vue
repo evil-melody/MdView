@@ -455,6 +455,12 @@ async function openTab(entry: FileEntry) {
     return
   }
 
+  // 压缩包：无预览/编辑能力，直接提示
+  if (entry.kind === 'archive') {
+    showToast('压缩包暂不支持预览')
+    return
+  }
+
   // 非文本类：图片/PDF/音视频/office → viewer 预览
   if (viewerTypeFor(entry)) {
     state.tabs.push({ entry, content: '', dirty: false })
@@ -475,6 +481,13 @@ async function openTab(entry: FileEntry) {
         }
       } catch {
         /* md 载入失败则仅预览 */
+      }
+    } else if (['csv', 'tsv'].includes((entry.ext || '').toLowerCase())) {
+      // csv/tsv：编辑走文本方式，读入原文
+      try {
+        rtab.content = await readText(entry.path)
+      } catch {
+        /* 读取失败则仅预览 */
       }
     }
     return
@@ -559,7 +572,9 @@ async function saveCurrent() {
         throw new Error('编辑器未就绪，导出失败')
       }
     } else if (ext === 'pptx') {
-      // pptx 文字 / 图片已在 PptxInlineEditor 中直接写回文件；保存按钮仅清脏标记
+      // Univer 幻灯片画布：把文本改动按 manifest 写回 OOXML，失败则提示并不清脏标记
+      const ok = await paneRef.value?.commitPptx?.()
+      if (!ok) throw new Error('幻灯片写回失败')
     } else {
       await writeTextNoted(t)
     }

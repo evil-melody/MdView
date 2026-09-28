@@ -1,0 +1,83 @@
+.uxe {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 工具栏：固定在顶部，不随画布滚动 */
+.uxe-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border, #e3e3e6);
+  background: var(--bg-elevated, #fafafa);
+  flex: none;
+}
+
+.uxe-btn {
+  min-width: 28px;
+  height: 26px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text, #1f1f22);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.uxe-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+.uxe-btn.primary {
+  background: var(--accent, #2f6fed);
+  border-color: transparent;
+  color: #fff;
+}
+
+.uxe-btn.primary:hover {
+  filter: brightness(0.94);
+}
+
+.uxe-page {
+  min-width: 34px;
+  padding: 0 4px;
+  color: var(--text-muted, #8a8a92);
+  font-size: 12px;
+  text-align: center;
+}
+
+.uxe-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.uxe-saving {
+  color: var(--text-muted, #8a8a92);
+  font-size: 12px;
+}
+
+.uxe-notice {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border, #e3e3e6);
+  background: var(--bg-elevated, #fafafa);
+  color: var(--text-muted, #8a8a92);
+  font-size: 12px;
+}
+
+/* Univer 挂载点：撑满剩余高度，滚动由 Univer 自身处理 */
+.uxe-host {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}

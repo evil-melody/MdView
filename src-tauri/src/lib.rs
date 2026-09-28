@@ -6,7 +6,8 @@ use std::sync::Mutex;
 
 use commands::{
     ai_chat_stream, delete_path, index_root, load_config_cmd, read_binary_base64, read_docx_html,
-    read_file_as_bytes, read_office_md, read_pptx_outline, read_pptx_slide, read_text, rename_path,
+    read_docx_univer, read_file_as_bytes, read_office_md, read_pptx_outline, read_pptx_slide,
+    read_pptx_univer, read_text, rename_path,
     replace_pptx_image, save_config_cmd, scan_directory, search_files, toggle_devtools,
     update_pptx_text, write_binary_base64, write_office_md, write_text,
 };
@@ -32,9 +33,11 @@ pub fn run() {
             write_office_md,
             read_pptx_outline,
             read_pptx_slide,
+            read_pptx_univer,
             replace_pptx_image,
             update_pptx_text,
             read_docx_html,
+            read_docx_univer,
             read_file_as_bytes,
             write_text,
             delete_path,
