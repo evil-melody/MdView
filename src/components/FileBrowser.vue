@@ -25,6 +25,7 @@ const emit = defineEmits<{
   (e: 'delete', entry: FileEntry): void
   (e: 'rename', entry: FileEntry, name: string): void
   (e: 'up'): void
+  (e: 'new-file'): void
   (e: 'open-dir', path: string): void
   (e: 'search'): void
   (e: 'update:query', v: string): void
@@ -148,6 +149,7 @@ function focusSearch(e: MouseEvent) {
       </template>
       <template v-else-if="mode !== 'flat'">
         <button class="btn ghost icon-btn" title="上级目录" @click="emit('up')">↑</button>
+        <button class="btn new-file-btn" title="在当前目录新建文件" @click="emit('new-file')">＋ 新建</button>
         <div class="crumbs scrollable">
           <template v-if="searchActive">
             <span class="crumb search-crumb">搜索结果 ({{ entries.length }})</span>

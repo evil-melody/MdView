@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
-import { open } from '@tauri-apps/plugin-dialog'
+import { open, save } from '@tauri-apps/plugin-dialog'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { state, type OpenTab } from './store'
 import { loadConfig, saveConfig, scanDirectory, indexRoot, deletePath, renamePath, searchFiles, readText, writeText, readOfficeMd, writeOfficeMd, writeBinaryBase64, aiChatStream } from './api'
-import type { FileEntry, AppConfig } from './types'
+import type { FileEntry, AppConfig, NewFileType } from './types'
 import type { PageKey } from './store'
 import { KIND_LABEL } from './types'
 import Sidebar from './components/Sidebar.vue'
@@ -13,6 +13,7 @@ import FileBrowser from './components/FileBrowser.vue'
 import PreviewPane from './components/PreviewPane.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import LibraryDialog from './components/LibraryDialog.vue'
+import NewFileDialog from './components/NewFileDialog.vue'
 import HomePage from './components/HomePage.vue'
 import HelpPage from './components/HelpPage.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
@@ -35,6 +36,11 @@ const showSettings = ref(false)
 /** PreviewPane 实例引用：office 保存时调 exportOffice() 取原生二进制 */
 const paneRef = ref<any>(null)
 const showLibDialog = ref(false)
+/** 新建文件弹窗：默认落当前打开目录，可在弹窗内改到别处 */
+const showNewFile = ref(false)
+const newFileDir = ref('')
+/** 刚创建的文件路径：PreviewPane 命中后直接进「编辑」页签 */
+const justCreatedPath = ref<string | null>(null)
 const toast = ref('')
 // AI 浮窗状态（全局：FAB + 流式输出）
 const aiOpen = ref(false)
@@ -396,6 +402,86 @@ async function openSingleFile() {
     modified: '',
     kind: kindFromPath(sel)
   })
+}
+
+/** 新建文件入口：默认目标目录 = 当前打开目录，无则回落首个资料库 */
+function openNewFile() {
+  const dir = state.currentDir || state.config.scan_roots[0] || ''
+  if (!dir) {
+    showToast('请先添加资料库目录')
+    return
+  }
+  newFileDir.value = dir
+  showNewFile.value = true
+}
+
+async function createNewFile(p: { type: NewFileType; name: string; dir: string }) {
+  const fileName = `${p.name}.${p.type.ext}`
+  const dir = p.dir.replace(/[/\\]+$/, '')
+  const path = `${dir}/${fileName}`
+  try {
+    const siblings = await scanDirectory(dir)
+    // 大小写不敏感比较：macOS/Windows 文件系统下 readme.md 会覆盖 README.md
+    const lower = fileName.toLowerCase()
+    if (siblings.some((e) => e.name.toLowerCase() === lower)) {
+      showToast(`「${fileName}」已存在，换个名字`)
+      return
+    }
+    await writeText(path, p.type.template)
+  } catch (e) {
+    showToast('创建失败: ' + String(e))
+    return
+  }
+  showNewFile.value = false
+  state.page = 'files'
+  state.searchResults = []
+  await openDir(dir)
+  await rebuildIndex(false)
+  const entry: FileEntry = {
+    name: fileName,
+    path,
+    is_dir: false,
+    ext: p.type.ext,
+    size: p.type.template.length,
+    modified: '',
+    kind: kindFromPath(path)
+  }
+  justCreatedPath.value = path
+  await openTab(entry)
+  showToast('已创建: ' + fileName)
+}
+
+/** 另存为：原生保存弹窗选位置，落盘后页签改指向新文件 */
+async function saveAsCurrent() {
+  const t = state.tabs.find((x) => x.entry.path === state.activeTabPath)
+  if (!t) return
+  const ext = (t.entry.ext || '').toLowerCase()
+  const target = await save({
+    defaultPath: t.entry.name,
+    filters: ext ? [{ name: ext.toUpperCase(), extensions: [ext] }] : []
+  })
+  if (typeof target !== 'string' || !target) return
+  try {
+    await writeText(target, t.content)
+  } catch (e) {
+    showToast('另存为失败: ' + String(e))
+    return
+  }
+  const name = target.split('/').pop() || target
+  t.entry = {
+    ...t.entry,
+    name,
+    path: target,
+    ext: (name.split('.').pop() || '').toLowerCase(),
+    kind: kindFromPath(target)
+  }
+  state.activeTabPath = target
+  state.selected = t.entry
+  t.dirty = false
+  const dir = target.slice(0, target.lastIndexOf('/'))
+  if (dir && dir === state.currentDir) await openDir(dir)
+  await rebuildIndex(false)
+  showToast('已另存为: ' + name)
 }
 
 function requestDelete(entry: FileEntry) {
@@ -790,6 +876,7 @@ onMounted(init)
       @open-entry="onSelect"
       @toggle-theme="toggleTheme"
       @manage-roots="showLibDialog = true"
+      @new-file="openNewFile"
       @entry-context="openCtxMenu"
     />
     <div
@@ -836,9 +923,11 @@ onMounted(init)
             :active-tab-path="state.activeTabPath"
             :viewer="activeViewer"
             :base-path="activeBaseDir"
+            :edit-on-open="justCreatedPath"
             @switch-tab="switchTab"
             @close-tab="requestCloseTab"
             @save="saveCurrent"
+            @save-as="saveAsCurrent"
             @update:content="content = $event"
             @close="closeDoc"
             @open-ai="openAiDrawer"
@@ -859,6 +948,7 @@ onMounted(init)
           @rename="onRename"
           @up="openDir(currentParent)"
           @open-dir="openDir"
+          @new-file="openNewFile"
           @search="doSearch"
           @entry-context="openCtxMenu"
           v-model:query="state.searchQuery"
@@ -879,6 +969,13 @@ onMounted(init)
       @close="showLibDialog = false"
       @saved="onLibSaved"
       @open-root="onLibOpenRoot"
+    />
+
+    <NewFileDialog
+      v-if="showNewFile"
+      :default-dir="newFileDir"
+      @close="showNewFile = false"
+      @create="createNewFile"
     />
 
     <ConfirmDialog

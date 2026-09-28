@@ -19,6 +19,23 @@
   font-size: 16px;
 }
 
+/* 新建文件：与「上级目录」同高，胶囊主色描边 */
+.new-file-btn {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 12.5px;
+  border-color: var(--accent);
+  color: var(--accent-2);
+  background: var(--accent-soft);
+  flex-shrink: 0;
+}
+
+.new-file-btn:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
 .crumbs {
   flex: 1;
   display: flex;

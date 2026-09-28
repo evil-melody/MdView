@@ -25,10 +25,13 @@ const props = defineProps<{
   activeTabPath?: string | null
   viewer?: TabViewer | null
   basePath?: string | null
+  /** 新建文件的路径：命中时打开即切到「编辑」页签 */
+  editOnOpen?: string | null
 }>()
 
 const emit = defineEmits<{
   (e: 'save'): void
+  (e: 'save-as'): void
   (e: 'update:content', v: string): void
   (e: 'close'): void
   (e: 'switch-tab', path: string): void
@@ -39,11 +42,16 @@ const emit = defineEmits<{
 
 const tab = ref<ViewTab>('preview')
 const outlineOpen = ref(false)
+/** 编辑器报错文案：明确展示原因便于定位 */
+const editorErr = ref('')
+// immediate：新建文件后 PreviewPane 首次挂载时也要命中 editOnOpen 直接进编辑
 watch(
   () => props.entry?.path,
-  () => {
+  (p) => {
     editorErr.value = ''
-  }
+    if (p && p === props.editOnOpen) tab.value = 'edit'
+  },
+  { immediate: true }
 )
 
 /** 文本类 + docx/xlsx/pptx 可编辑；未知扩展名（other）与 csv/tsv 也按文本尝试编辑 */
@@ -129,9 +137,6 @@ async function exportOffice(): Promise<string | null> {
   return null
 }
 
-/** 编辑器报错文案：明确展示原因便于定位 */
-const editorErr = ref('')
-
 function onDocEditorError(msg: string) {
   editorErr.value = msg
 }
@@ -198,6 +203,12 @@ defineExpose({ exportOffice, commitPptx })
           title="打开 AI 助手浮窗"
           @click="emit('open-ai')"
         >AI 助手</button>
+        <button
+          v-if="canEdit && !isOffice"
+          class="btn"
+          title="保存到其它位置"
+          @click="emit('save-as')"
+        >另存为</button>
         <button
           v-if="canEdit"
           class="btn primary"

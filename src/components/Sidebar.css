@@ -298,9 +298,15 @@
   justify-content: space-between;
 }
 
+.head-btns {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
 .add-btn {
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   padding: 0;
   border: 1px solid var(--border-2);
   border-radius: 6px;
@@ -312,6 +318,10 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
+}
+
+.ab-ico {
+  display: block;
 }
 
 .add-btn:hover {
