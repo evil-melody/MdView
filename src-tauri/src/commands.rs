@@ -171,11 +171,21 @@ pub fn read_docx_univer(path: String) -> Result<String, String> {
     crate::office::docx_to_univer(&data)
 }
 
-/// 读取文件为字节数组（自 InspireLoom file_io.rs 移植：替代 base64 IPC，
-/// 前端 canvas-editor / SheetJS 等直接 new Uint8Array(bytes).buffer 使用）
+/// 读取文件原始字节。返回 `tauri::ipc::Response` 走 Tauri v2 原始字节通道——
+/// 前端 `invoke` 直接拿到 `ArrayBuffer`，避免把整文件序列化成 JSON 数组
+/// （300MB 文件会变成 GB 级 JSON，直接卡死 WebView）。
 #[tauri::command]
-pub async fn read_file_as_bytes(path: String) -> Result<Vec<u8>, String> {
-    fs::read(&path).map_err(|e| e.to_string())
+pub async fn read_file_as_bytes(path: String) -> Result<tauri::ipc::Response, String> {
+    let data = fs::read(&path).map_err(|e| e.to_string())?;
+    Ok(tauri::ipc::Response::new(data))
+}
+
+/// 写入文件原始字节（与 `read_file_as_bytes` 对称：同样走原始字节通道，
+/// 避免大文件 base64 + JSON 序列化把 WebView 卡死）。
+#[tauri::command]
+pub async fn write_file_bytes(path: String, contents: Vec<u8>) -> Result<bool, String> {
+    fs::write(&path, &contents).map_err(|e| e.to_string())?;
+    Ok(true)
 }
 
 /// Markdown 写回 docx / xlsx / pptx

@@ -1,6 +1,8 @@
 mod commands;
 mod config;
+mod images;
 pub mod office;
+mod summary;
 
 use std::sync::Mutex;
 
@@ -9,8 +11,12 @@ use commands::{
     read_docx_univer, read_file_as_bytes, read_office_md, read_pptx_outline, read_pptx_slide,
     read_pptx_univer, read_text, rename_path,
     replace_pptx_image, save_config_cmd, scan_directory, search_files, toggle_devtools,
-    update_pptx_text, write_binary_base64, write_office_md, write_text,
+    update_pptx_text, write_binary_base64, write_file_bytes, write_office_md, write_text,
 };
+use images::{
+    clear_image_index, find_similar, index_images, load_image_index, remove_image_records,
+};
+use summary::{clear_summaries, load_summaries, summarize_files};
 use tauri::{Emitter, Manager};
 
 /// 冷启动（窗口尚未就绪）期间由系统文件关联触发的打开请求，先缓存，待前端 init 后取走。
@@ -39,6 +45,7 @@ pub fn run() {
             read_docx_html,
             read_docx_univer,
             read_file_as_bytes,
+            write_file_bytes,
             write_text,
             delete_path,
             rename_path,
@@ -46,6 +53,14 @@ pub fn run() {
             load_config_cmd,
             save_config_cmd,
             ai_chat_stream,
+            summarize_files,
+            load_summaries,
+            clear_summaries,
+            index_images,
+            find_similar,
+            load_image_index,
+            clear_image_index,
+            remove_image_records,
             take_pending_opens,
         ])
         .build(tauri::generate_context!())

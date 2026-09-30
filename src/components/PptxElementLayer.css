@@ -1,0 +1,67 @@
+/*
+ * 选中层：整层 pointer-events:none，只有选中框与手柄可交互 —— 空白处的点击要继续落到
+ * 下层 SVG 上（由容器做命中测试并清除选中），否则文字单击编辑会被这层吃掉。
+ */
+.pxl {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.pxl-frame {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.5px solid var(--accent);
+  pointer-events: auto;
+  cursor: move;
+}
+
+.pxl-frame--grouped {
+  border-style: dashed;
+}
+
+.pxl-badge {
+  position: absolute;
+  top: -16px;
+  left: -1.5px;
+  padding: 0 4px;
+  font-size: 10px;
+  line-height: 15px;
+  color: #fff;
+  background: var(--accent);
+  border-radius: 3px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.pxl-handle {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  background: #fff;
+  border: 1.5px solid var(--accent);
+  border-radius: 2px;
+  pointer-events: auto;
+}
+
+.pxl-handle[data-handle='nw'],
+.pxl-handle[data-handle='se'] {
+  cursor: nwse-resize;
+}
+
+.pxl-handle[data-handle='ne'],
+.pxl-handle[data-handle='sw'] {
+  cursor: nesw-resize;
+}
+
+.pxl-handle[data-handle='n'],
+.pxl-handle[data-handle='s'] {
+  cursor: ns-resize;
+}
+
+.pxl-handle[data-handle='e'],
+.pxl-handle[data-handle='w'] {
+  cursor: ew-resize;
+}

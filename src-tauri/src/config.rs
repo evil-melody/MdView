@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiConfig {
@@ -62,4 +63,40 @@ pub fn save_config(cfg: &AppConfig) -> Result<(), String> {
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+}
+
+/// 当前 unix 秒（摘要/索引写入时间戳）
+pub fn now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/**
+ * 文件内容指纹：`size:mtime(秒)`。任一变化即视为内容可能已变——
+ * AI 摘要、图片哈希等派生数据都靠它判断缓存是否失效。
+ */
+pub fn file_fingerprint(path: &str) -> String {
+    match fs::metadata(path) {
+        Ok(m) => {
+            let mt = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            format!("{}:{}", m.len(), mt)
+        }
+        Err(_) => String::new(),
+    }
+}
+
+/// 派生数据缓存统一落在 config_dir/MdView/<name>（如 summaries.json / image-index.json）
+pub fn cache_path(name: &str) -> PathBuf {
+    let mut dir = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+    dir.push("MdView");
+    fs::create_dir_all(&dir).ok();
+    dir.push(name);
+    dir
 }

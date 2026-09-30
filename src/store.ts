@@ -1,7 +1,7 @@
 import { reactive } from 'vue'
-import type { AppConfig, FileEntry, ViewTab } from './types'
+import type { AppConfig, FileEntry, SimilarGroup, SummaryRecord, ViewTab } from './types'
 
-export type PageKey = 'home' | 'files' | 'recent' | 'category' | 'help'
+export type PageKey = 'home' | 'files' | 'recent' | 'category' | 'similar' | 'help'
 
 /** 非文本文件的预览模型（图片/PDF/音视频/office） */
 export interface TabViewer {
@@ -34,6 +34,23 @@ interface AppState {
   searchResults: FileEntry[]
   searching: boolean
   busy: boolean
+  /** 文件树版本号：文件系统发生变更后自增，FileTree 监听后重扫已加载节点 */
+  treeVersion: number
+  /** AI 摘要缓存：path -> 记录（启动时从后端 summaries.json 载入） */
+  summaries: Record<string, SummaryRecord>
+  /** 批量摘要进行中（列表顶部显示进度条） */
+  summaryBusy: boolean
+  summaryDone: number
+  summaryTotal: number
+  /** 已索引图片数（dHash 索引） */
+  imageIndexed: number
+  /** 图片索引扫描中 + 进度 */
+  imageIndexing: boolean
+  imageIndexDone: number
+  imageIndexTotal: number
+  /** 相似图片分组结果 */
+  similarGroups: SimilarGroup[]
+  similarBusy: boolean
 }
 
 export const state = reactive<AppState>({
@@ -54,8 +71,29 @@ export const state = reactive<AppState>({
   searchQuery: '',
   searchResults: [],
   searching: false,
-  busy: false
+  busy: false,
+  treeVersion: 0,
+  summaries: {},
+  summaryBusy: false,
+  summaryDone: 0,
+  summaryTotal: 0,
+  imageIndexed: 0,
+  imageIndexing: false,
+  imageIndexDone: 0,
+  imageIndexTotal: 0,
+  similarGroups: [],
+  similarBusy: false
 })
+
+/** 取文件摘要正文（无记录返回空串） */
+export function summaryOf(path: string): string {
+  return state.summaries[path]?.summary || ''
+}
+
+/** 文件系统变更（增/删/改名/另存/粘贴图片）后调用：通知左侧资料库树重扫 */
+export function bumpTree() {
+  state.treeVersion++
+}
 
 export function kindCounts(): Record<string, number> {
   const map: Record<string, number> = {}

@@ -1,0 +1,14 @@
+{
+  "name": "pptx-spike",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "fast-xml-parser": "^5.3.4",
+    "jszip": "^3.10.1",
+    "opentype.js": "^2.0.0",
+    "bidi-js": "^1.0.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}

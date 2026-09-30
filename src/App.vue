@@ -3,8 +3,8 @@ import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
-import { state, type OpenTab } from './store'
-import { loadConfig, saveConfig, scanDirectory, indexRoot, deletePath, renamePath, searchFiles, readText, writeText, readOfficeMd, writeOfficeMd, writeBinaryBase64, aiChatStream } from './api'
+import { state, bumpTree, type OpenTab } from './store'
+import { loadConfig, saveConfig, scanDirectory, indexRoot, deletePath, renamePath, searchFiles, readText, writeText, readOfficeMd, writeOfficeMd, writeBinaryBase64, aiChatStream, summarizeFiles, loadSummaries, clearSummaries, removeImageRecords } from './api'
 import type { FileEntry, AppConfig, NewFileType } from './types'
 import type { PageKey } from './store'
 import { KIND_LABEL } from './types'
@@ -16,6 +16,7 @@ import LibraryDialog from './components/LibraryDialog.vue'
 import NewFileDialog from './components/NewFileDialog.vue'
 import HomePage from './components/HomePage.vue'
 import HelpPage from './components/HelpPage.vue'
+import SimilarImages from './components/SimilarImages.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import AiDrawer from './components/AiDrawer.vue'
 import { parseMarkdown, type MarkdownHeading } from './utils/markdown'
@@ -84,6 +85,8 @@ const pageTitle = computed(() => {
       return '最近更新'
     case 'category':
       return `${KIND_LABEL[state.categoryKind] || state.categoryKind}`
+    case 'similar':
+      return '相似图片'
     case 'help':
       return '帮助文档'
   }
@@ -338,6 +341,7 @@ async function onSelect(entry: FileEntry) {
 
 async function onRename(entry: FileEntry, newName: string) {
   const np = await renamePath(entry.path, newName)
+  bumpTree()
   if (state.page === 'files' || state.page === 'category') {
     await openDir(state.currentDir)
     await rebuildIndex(false)
@@ -345,6 +349,13 @@ async function onRename(entry: FileEntry, newName: string) {
   if (state.selected?.path === entry.path) {
     state.selected = { ...entry, path: np, name: newName }
   }
+}
+
+/** 摘要缓存里有、但当前索引里没有的文件：兜底造一个最小 FileEntry，保证可点击打开 */
+function entryFromPath(p: string): FileEntry {
+  const name = p.split(/[/\\]/).pop() || p
+  const ext = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : ''
+  return { name, path: p, is_dir: false, ext, size: 0, modified: '', kind: 'other' }
 }
 
 async function doSearch() {
@@ -369,6 +380,18 @@ async function doSearch() {
       } catch (e) {
         console.warn('搜索失败:', root, e)
       }
+    }
+    // 摘要命中：文件名/正文没中、但 AI 摘要命中语义关键词的文件也纳入结果
+    const q = state.searchQuery.trim().toLowerCase()
+    const seenPath = new Set(all.map((e) => e.path))
+    for (const [p, rec] of Object.entries(state.summaries)) {
+      if (seenPath.has(p)) continue
+      if (!rec.summary.toLowerCase().includes(q)) continue
+      const known =
+        state.indexEntries.find((e) => e.path === p) ??
+        state.entries.find((e) => e.path === p)
+      all.push(known ?? entryFromPath(p))
+      seenPath.add(p)
     }
     state.searchResults = all
     if (state.page !== 'files') state.page = 'files'
@@ -435,6 +458,7 @@ async function createNewFile(p: { type: NewFileType; name: string; dir: string }
   showNewFile.value = false
   state.page = 'files'
   state.searchResults = []
+  bumpTree()
   await openDir(dir)
   await rebuildIndex(false)
   const entry: FileEntry = {
@@ -478,14 +502,45 @@ async function saveAsCurrent() {
   state.activeTabPath = target
   state.selected = t.entry
   t.dirty = false
+  bumpTree()
   const dir = target.slice(0, target.lastIndexOf('/'))
   if (dir && dir === state.currentDir) await openDir(dir)
   await rebuildIndex(false)
   showToast('已另存为: ' + name)
 }
 
+/** 手动刷新：左侧树 + 右侧列表 + 索引一起重扫（覆盖在应用外改动文件的场景） */
+async function refreshAll() {
+  bumpTree()
+  if (state.currentDir) await openDir(state.currentDir)
+  await rebuildIndex(false)
+  showToast('已刷新')
+}
+
+/** 编辑器粘贴截图落盘后：新图片进索引与树 */
+async function onImageSaved() {
+  bumpTree()
+  await rebuildIndex(false)
+}
+
 function requestDelete(entry: FileEntry) {
   pendingDelete.value = entry
+}
+
+/** 相似图片页：点缩略图定位并打开该文件（合成最小 FileEntry 复用既有打开链路） */
+async function onSimilarOpen(path: string) {
+  const known =
+    state.indexEntries.find((e) => e.path === path) ??
+    state.entries.find((e) => e.path === path)
+  await onSelect(known ?? entryFromPath(path))
+}
+
+/** 相似图片页：删除单张（走统一确认弹窗，删后重算分组与索引计数） */
+function onSimilarDelete(path: string) {
+  const known =
+    state.indexEntries.find((e) => e.path === path) ??
+    state.entries.find((e) => e.path === path)
+  requestDelete(known ?? entryFromPath(path))
 }
 
 async function confirmDelete() {
@@ -496,6 +551,9 @@ async function confirmDelete() {
     await deletePath(entry.path)
     showToast('已删除: ' + entry.name)
     pendingDelete.value = null
+    // 图片索引同步移除，否则已删文件仍会出现在相似分组里
+    removeImageRecords([entry.path]).catch(() => {})
+    bumpTree()
     if (state.page === 'files' || state.page === 'category') {
       await openDir(state.currentDir)
       await rebuildIndex(false)
@@ -530,8 +588,12 @@ function tabBindings() {
   return { content, headings, dirty, activeTab }
 }
 
-/** 文本预览上限（字符）：超大 config/lock 文件整份 parseMarkdown 会卡死主线程 */
-const MAX_PREVIEW_CHARS = 2_000_000
+/**
+ * 文本预览上限（字符）：超大文件整体 innerHTML 布局会卡死主线程。
+ * 现改为流式分片注入（见 MdPreview），单份解析+净化为一次有界准备，正文逐段出现，
+ * 故上限放宽到 5MB；更极端的大小仍拒预览以防内存膨胀。
+ */
+const MAX_PREVIEW_CHARS = 5_000_000
 
 async function openTab(entry: FileEntry) {
   const existing = state.tabs.find((t) => t.entry.path === entry.path)
@@ -712,9 +774,60 @@ const aiCanRun = computed(() => {
 let unlistenChunk: UnlistenFn | null = null
 let unlistenDone: UnlistenFn | null = null
 let unlistenError: UnlistenFn | null = null
+let unlistenSummary: UnlistenFn | null = null
+/** 当前批量摘要任务 id：用于屏蔽过期任务的进度事件 */
+let summaryReqId = ''
 
 function newReqId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+/**
+ * 批量生成 AI 摘要：命中缓存的文件直接复用（force=true 时先清缓存强制重算）。
+ * 进度由后端 `ai-sum-progress` 事件驱动，完成后整体回填 store.summaries。
+ */
+async function runBatchSummary(paths: string[], force = false) {
+  if (!aiEnabled.value) {
+    showToast('请先在设置中启用 AI 并配置远程 API')
+    showSettings.value = true
+    return
+  }
+  const targets = paths.filter((p) => !!p)
+  if (!targets.length) {
+    showToast('当前目录没有可摘要的文件')
+    return
+  }
+  if (state.summaryBusy) {
+    showToast('摘要任务正在运行，请稍候')
+    return
+  }
+  const reqId = newReqId()
+  summaryReqId = reqId
+  state.summaryBusy = true
+  state.summaryDone = 0
+  state.summaryTotal = targets.length
+  try {
+    if (force) await clearSummaries(targets)
+    const res = await summarizeFiles(reqId, targets)
+    if (summaryReqId !== reqId) return
+    state.summaries = await loadSummaries()
+    const ok = res.filter((r) => !r.error).length
+    const cached = res.filter((r) => r.cached).length
+    showToast(`AI 摘要完成：${ok}/${res.length}（复用缓存 ${cached}）`)
+  } catch (e: any) {
+    if (summaryReqId === reqId) showToast('AI 摘要失败：' + String(e?.message ?? e))
+  } finally {
+    if (summaryReqId === reqId) {
+      state.summaryBusy = false
+      state.summaryDone = state.summaryTotal
+    }
+  }
+}
+
+/** 列表里点「AI 摘要」：对当前可见文件（不含目录）批量生成 */
+function summarizeVisible(force = false) {
+  const list = showingFlat.value ? flatEntries.value : state.entries
+  runBatchSummary(list.filter((e) => !e.is_dir).map((e) => e.path), force)
 }
 
 async function runAiTask(taskKey: string) {
@@ -768,6 +881,20 @@ function openAiDrawer() {
 }
 
 onMounted(async () => {
+  unlistenSummary = await listen<{ id: string; done: number; total: number; path: string }>(
+    'ai-sum-progress',
+    (e) => {
+      if (e.payload.id !== summaryReqId) return
+      state.summaryDone = e.payload.done
+      state.summaryTotal = e.payload.total
+    }
+  )
+  // 摘要缓存启动时载入：列表展示 / 搜索命中 / 树过滤都读它
+  try {
+    state.summaries = await loadSummaries()
+  } catch {
+    state.summaries = {}
+  }
   unlistenChunk = await listen<{ id: string; delta: string }>('ai-chunk', (e) => {
     if (e.payload.id !== aiReqId.value) return
     aiResult.value += e.payload.delta
@@ -787,6 +914,7 @@ onBeforeUnmount(() => {
   unlistenChunk?.()
   unlistenDone?.()
   unlistenError?.()
+  unlistenSummary?.()
 })
 
 // ---- 右键菜单（替代 webview 默认菜单，提供文件操作） ----
@@ -877,6 +1005,7 @@ onMounted(init)
       @toggle-theme="toggleTheme"
       @manage-roots="showLibDialog = true"
       @new-file="openNewFile"
+      @refresh="refreshAll"
       @entry-context="openCtxMenu"
     />
     <div
@@ -908,6 +1037,13 @@ onMounted(init)
       />
       <HelpPage v-else-if="state.page === 'help'" @open-settings="showSettings = true" />
 
+      <SimilarImages
+        v-else-if="state.page === 'similar'"
+        @open-file="onSimilarOpen"
+        @delete="onSimilarDelete"
+        @toast="showToast"
+      />
+
       <template v-else>
         <!-- 文档打开：直接全宽预览（树在左侧资料库中） -->
         <PreviewPane
@@ -928,6 +1064,7 @@ onMounted(init)
             @close-tab="requestCloseTab"
             @save="saveCurrent"
             @save-as="saveAsCurrent"
+            @image-saved="onImageSaved"
             @update:content="content = $event"
             @close="closeDoc"
             @open-ai="openAiDrawer"
@@ -951,6 +1088,8 @@ onMounted(init)
           @new-file="openNewFile"
           @search="doSearch"
           @entry-context="openCtxMenu"
+          @summarize="(force) => summarizeVisible(force)"
+          @summarize-one="(e, force) => runBatchSummary([e.path], force)"
           v-model:query="state.searchQuery"
         />
       </template>

@@ -25,6 +25,7 @@
 - **预览 / 编辑 / 脑图** 三模式页签，随时切换
 - GFM 语法、代码高亮、**Mermaid 图表**实时渲染
 - **Markmap 思维导图**一键生成，大纲导航跳转
+- **粘贴截图**：编辑态 `⌘V` 直接贴入剪贴板图片，自动存为文档同目录 `image-<时间戳>.png` 并插入相对路径引用（对标 Typora / Obsidian）
 - 本地图片相对路径自动解析，离线可用
 
 ### 全格式文件支持
@@ -46,6 +47,7 @@
 - **分类导航**：Markdown / 文档 / 表格 / 演示 / PDF / 图片 / 代码 / 配置 / 压缩包 / 音视频
 - 文件名与内容全文检索、最近更新列表、多页签并行打开
 - 右键菜单：Finder 中显示 / 复制路径 / 删除（二次确认）
+- **左右联动**：右侧增删改 / 新建 / 另存为 / 粘贴截图后，左侧资料库树自动重扫并保留展开态；标题栏刷新按钮可整体重扫（树 + 列表 + 索引），覆盖在应用外改动文件的场景
 
 ### AI 助手（可选）
 - 对接任意 **OpenAI 兼容接口**（base_url + api_key + model）
@@ -92,7 +94,9 @@ npm install
 npm run app:build
 ```
 
-产物位于 `src-tauri/target/release/bundle/msi/MdView_0.1.0_x64_en-US.msi`，双击即装。
+产物位于 `src-tauri/target/release/bundle/msi/MdView_1.0.2_x64_en-US.msi`，双击即装。
+
+> 安装包版本号取自 `src-tauri/Cargo.toml` 的 `[package] version`（`tauri.conf.json` 未声明 `version` 时按官方规则回落到 Cargo.toml）。改版本只需改 Cargo.toml 一处。
 
 ### 说明与可选加固
 - **跨平台产物差异**：macOS 产出 `.app / .dmg`，Windows 产出 `.msi`（已在 `tauri.conf.json` 的 `bundle.windows.targets` 中配置），两者互不兼容，需各自在对应系统打包。

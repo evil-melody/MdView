@@ -5,6 +5,7 @@ import { KIND_LABEL } from '../types'
 import FileTree from './FileTree.vue'
 import FileIcon from './FileIcon.vue'
 import { state } from '../store'
+import { fmtSize } from '../utils/format'
 
 const props = defineProps<{
   currentDir: string
@@ -29,6 +30,10 @@ const emit = defineEmits<{
   (e: 'open-dir', path: string): void
   (e: 'search'): void
   (e: 'update:query', v: string): void
+  /** 批量 AI 摘要：force=true 表示忽略已有缓存重新生成 */
+  (e: 'summarize', force: boolean): void
+  /** 单个文件的摘要：生成 / 重新生成 */
+  (e: 'summarize-one', entry: FileEntry, force: boolean): void
   (e: 'collapse-list'): void
   (e: 'entry-context', entry: FileEntry, ev: MouseEvent): void
 }>()
@@ -99,13 +104,6 @@ const breadcrumbs = computed(() => {
   })
 })
 
-function fmtSize(n: number): string {
-  if (n < 1024) return n + ' B'
-  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
-  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB'
-  return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB'
-}
-
 function startRename(e: FileEntry) {
   renameTarget.value = e.path
   renameValue.value = e.name
@@ -121,6 +119,30 @@ function confirmRename(e: FileEntry) {
 function focusSearch(e: MouseEvent) {
   const input = (e.currentTarget as HTMLElement).querySelector('input')
   input?.focus()
+}
+
+/** 该文件是否已有 AI 摘要 */
+function hasSummary(p: string): boolean {
+  return !!state.summaries[p]?.summary
+}
+
+/** 列表/卡片里展示的摘要首行（一句话概括），超出省略 */
+function summaryLine(p: string): string {
+  const s = state.summaries[p]?.summary || ''
+  if (!s) return ''
+  const first = s.split('\n').find((l) => l.trim()) || ''
+  return first.replace(/^[-•\s]+/, '').trim()
+}
+
+/** 批量摘要进度百分比（除零保护） */
+const progressPct = computed(() =>
+  state.summaryTotal ? Math.round((state.summaryDone / state.summaryTotal) * 100) : 0
+)
+
+/** 摘要全文（悬浮 title 用）：限制长度避免巨型 tooltip */
+function summaryFull(p: string): string {
+  const s = state.summaries[p]?.summary || ''
+  return s.length > 600 ? s.slice(0, 600) + '…' : s
 }
 </script>
 
@@ -150,6 +172,18 @@ function focusSearch(e: MouseEvent) {
       <template v-else-if="mode !== 'flat'">
         <button class="btn ghost icon-btn" title="上级目录" @click="emit('up')">↑</button>
         <button class="btn new-file-btn" title="在当前目录新建文件" @click="emit('new-file')">＋ 新建</button>
+        <button
+          class="btn sum-btn"
+          :disabled="state.summaryBusy"
+          title="用 AI 为当前目录的文件批量生成摘要（已有摘要会复用缓存）"
+          @click="emit('summarize', false)"
+        >✨ AI 摘要</button>
+        <button
+          v-if="!state.summaryBusy"
+          class="btn ghost icon-btn"
+          title="重新生成（忽略已有摘要缓存）"
+          @click="emit('summarize', true)"
+        >↻</button>
         <div class="crumbs scrollable">
           <template v-if="searchActive">
             <span class="crumb search-crumb">搜索结果 ({{ entries.length }})</span>
@@ -187,12 +221,19 @@ function focusSearch(e: MouseEvent) {
       </div>
     </div>
 
+    <!-- AI 摘要批量任务进度：细条不占版面，任务结束自动消失 -->
+    <div v-if="state.summaryBusy" class="sum-progress">
+      <div class="sum-bar-wrap"><div class="sum-bar" :style="{ width: progressPct + '%' }"></div></div>
+      <span class="sum-text">AI 摘要中… {{ state.summaryDone }} / {{ state.summaryTotal }}</span>
+    </div>
+
     <!-- 侧栏树视图：多级目录展开 -->
     <FileTree
       v-if="variant === 'side' && sideView === 'tree'"
       :roots="treeRoots"
       :active-path="currentDir"
       @open-file="(e) => emit('select', e)"
+      @open-dir="(e) => emit('open-dir', e.path)"
     />
 
     <div v-else-if="effectiveView === 'grid'" class="grid scrollable">
@@ -227,8 +268,18 @@ function focusSearch(e: MouseEvent) {
             <span v-if="!e.is_dir" class="size">{{ fmtSize(e.size) }}</span>
           </div>
           <div class="card-mod">{{ e.modified }}</div>
+          <div
+            v-if="summaryLine(e.path)"
+            class="card-sum"
+            :title="summaryFull(e.path)"
+          >{{ summaryLine(e.path) }}</div>
         </div>
         <div class="card-actions" @click.stop>
+          <button
+            class="mini"
+            :title="hasSummary(e.path) ? '重新生成 AI 摘要' : '生成 AI 摘要'"
+            @click="emit('summarize-one', e, hasSummary(e.path))"
+          >✨</button>
           <button class="mini" title="重命名" @click="startRename(e)">✎</button>
           <button class="mini danger" title="删除" @click="emit('delete', e)">🗑</button>
         </div>
@@ -252,10 +303,20 @@ function focusSearch(e: MouseEvent) {
       >
         <span class="row-icon"><FileIcon :name="e.name" :is-dir="e.is_dir" :size="18" /></span>
         <span class="row-name" :title="e.path">{{ e.name }}</span>
+        <span
+          v-if="summaryLine(e.path)"
+          class="row-sum"
+          :title="summaryFull(e.path)"
+        >{{ summaryLine(e.path) }}</span>
         <span class="row-tag">{{ KIND_LABEL[e.kind] || '其他' }}</span>
         <span class="row-size">{{ e.is_dir ? '—' : fmtSize(e.size) }}</span>
         <span class="row-mod">{{ e.modified }}</span>
         <span class="row-actions" @click.stop>
+          <button
+            class="mini"
+            :title="hasSummary(e.path) ? '重新生成 AI 摘要' : '生成 AI 摘要'"
+            @click="emit('summarize-one', e, hasSummary(e.path))"
+          >✨</button>
           <button class="mini" @click="startRename(e)">✎</button>
           <button class="mini danger" @click="emit('delete', e)">🗑</button>
         </span>

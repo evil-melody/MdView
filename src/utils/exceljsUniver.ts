@@ -185,7 +185,7 @@ export async function xlsxToUniver(buffer: Uint8Array): Promise<IWorkbookData> {
   const data: any = {
     id: 'workbook',
     name: 'Workbook',
-    appVersion: '1.0.2',
+    appVersion: '1.0.3',
     locale: 'zh-CN',
     sheetOrder,
     sheets,

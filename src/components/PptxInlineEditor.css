@@ -78,7 +78,18 @@
   text-overflow: ellipsis;
 }
 
+/* 解析 / 字体加载状态（页数、耗时、webfont 族数） */
+.ppte-stat {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-left: 10px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .ppte-preview {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -92,6 +103,14 @@
   border: 1px solid var(--border);
   border-radius: var(--radius, 8px);
   overflow: hidden;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 620px;
+}
+
+/* 当前正在编辑/选中的页：左缘一道强调色，翻页时一眼定位 */
+.ppte-slide--active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-soft);
 }
 
 .ppte-head {
@@ -116,48 +135,83 @@
   font-size: 13px;
   color: var(--text);
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ppte-canvas {
   position: relative;
   width: 100%;
-  padding-bottom: 56.25%;
-  background: var(--bg-1, #f5f6f8);
-  overflow: hidden;
+  background: #fff;
 }
 
-.ppte-canvas :deep(.px-canvas) {
-  position: absolute;
-  inset: 0;
+/* 已激活插入工具：整个画布进入"点一下落位"状态 */
+.ppte-canvas--armed {
+  cursor: crosshair;
+}
+
+/*
+ * 只作用于最外层 SVG。引擎用嵌套 <svg viewBox> 实现图片的 <a:srcRect> 裁剪，
+ * 若写成后代选择器（`.ppte-svg svg`）会把内层裁剪容器一并撑满画布，图片层全部错位。
+ */
+.ppte-svg > :deep(svg) {
+  display: block;
   width: 100%;
-  height: 100%;
+  height: auto;
 }
 
-.ppte-canvas :deep(.px-shape) {
-  position: absolute;
-  cursor: text;
-  outline: none;
-  min-height: 1em;
+/* 单击 = 选中（双层选择框由 PptxElementLayer 绘制），双击 = 改文字/换图 */
+.ppte-svg :deep([data-source-id]) {
+  cursor: default;
 }
 
-.ppte-canvas :deep(.px-shape:focus),
-.ppte-canvas :deep(.px-shape:focus-visible) {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+.ppte-svg :deep([data-source-id]:hover) {
+  outline: 1.5px solid var(--accent);
+  outline-offset: -1px;
 }
 
-.ppte-canvas :deep(.px-shape:empty::before) {
-  content: '点击输入文字';
-  color: var(--text-3);
-  font-size: 12px;
-}
-
-.ppte-canvas :deep(.px-img) {
+.ppte-svg :deep([data-node-type='picture']) {
   cursor: pointer;
 }
 
-.ppte-canvas :deep(.px-img:hover) {
+.ppte-skeleton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 320px;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+/* 行内文字编辑浮层：只覆盖当前 shape 的文本框，提交后按引擎重新渲染精确版式 */
+.ppte-inline {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
   outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  background: rgba(255, 255, 255, 0.94);
+  line-height: 1.25;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: text;
+  z-index: 2;
+}
+
+.ppte-inline:focus {
+  outline: 2px solid var(--accent);
+}
+
+/* 单元格编辑层：压在单元格命中层（z-index 3）之上，且不抢单元格的 padding 语义 */
+.ppte-inline--cell {
+  z-index: 4;
+  align-items: flex-start;
+  padding: 2px 4px;
 }
 
 .ppte-loading,
@@ -167,6 +221,71 @@
   text-align: center;
   color: var(--text-3);
   font-size: 13px;
+}
+
+/* 加载遮罩：只盖预览区、居中卡片、不拦截交互（主面板始终可用） */
+.ppte-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  pointer-events: none;
+}
+
+.ppte-loading-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 22px 32px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 10px);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+}
+
+.ppte-loading-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-1, inherit);
+}
+
+.ppte-loading-sub {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.ppte-spinner {
+  width: 22px;
+  height: 22px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: ppte-spin 0.8s linear infinite;
+}
+
+@keyframes ppte-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 后台媒体解压进度：右下角小胶囊，不遮挡内容 */
+.ppte-media-pill {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  padding: 5px 12px;
+  font-size: 12px;
+  color: var(--text-3);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  pointer-events: none;
+  z-index: 5;
 }
 
 .ppte-error {

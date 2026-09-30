@@ -1092,12 +1092,19 @@ struct PxShape {
     h: Option<i64>, // a:ext cy（EMU）
     fill: Option<String>, // spPr solidFill 填充色
     anchor_ctr: bool,     // bodyPr anchor="ctr" 垂直居中
+    is_ph: bool,          // 占位符形状（layout/master 层需跳过，避免渲染提示文本）
+    ln_color: Option<String>, // 线条色：srgbClr 十六进制，或 "scheme:accent1" 主题色标记
+    ln_w: Option<i64>,    // 线宽（EMU，a:ln w）
+    geom: Option<String>, // prstGeom prst（连接线/形状几何类型）
+    flip_h: bool,         // xfrm flipH
+    flip_v: bool,         // xfrm flipV
 }
 
 #[derive(Default)]
 struct PxSlide {
     shapes: Vec<PxShape>,
     bg: Option<String>, // 幻灯片背景色
+    bg_rid: Option<String>, // 背景图 blipFill r:embed（指向 slide rels 中的媒体）
 }
 
 /// PPTX -> Markdown（按幻灯片顺序，保留粗体/斜体/列表/标题占位符，图片以占位符标记）。
@@ -1141,7 +1148,9 @@ fn parse_pptx_slide(xml: &str) -> PxSlide {
                     sptree_depth = Some(depth);
                 }
                 if let Some(d) = sptree_depth {
-                    if depth == d + 1 && (local == "sp" || local == "pic") {
+                    if depth == d + 1
+                        && (local == "sp" || local == "pic" || local == "cxnSp")
+                    {
                         cur = Some(PxShape {
                             is_pic: local == "pic",
                             ..Default::default()
@@ -1161,8 +1170,34 @@ fn parse_pptx_slide(xml: &str) -> PxSlide {
                         in_r_pr = true;
                     }
                     "spPr" => in_sp_pr = true,
-                    "ln" => in_ln = true,
+                    "ln" => {
+                        in_ln = true;
+                        if let Some(sh) = cur.as_mut() {
+                            if let Some(w) = px_attr(&e, "w").and_then(|v| v.parse::<i64>().ok()) {
+                                sh.ln_w = Some(w);
+                            }
+                        }
+                    }
+                    "xfrm" => {
+                        if let Some(sh) = cur.as_mut() {
+                            sh.flip_h = px_attr(&e, "flipH").as_deref() == Some("1");
+                            sh.flip_v = px_attr(&e, "flipV").as_deref() == Some("1");
+                        }
+                    }
+                    "prstGeom" => {
+                        if let Some(sh) = cur.as_mut() {
+                            sh.geom = px_attr(&e, "prst");
+                        }
+                    }
                     "bg" => in_bg = true,
+                    // 背景图：<p:bg><p:bgPr><a:blipFill><a:blip r:embed="rIdX"/>
+                    "blip" => {
+                        if in_bg {
+                            if let Some(rid) = px_attr(&e, "embed") {
+                                slide.bg_rid = Some(rid);
+                            }
+                        }
+                    }
                     "srgbClr" => {
                         if let Some(v) = px_attr(&e, "val") {
                             if in_r_pr {
@@ -1171,11 +1206,25 @@ fn parse_pptx_slide(xml: &str) -> PxSlide {
                                 }
                             } else if in_bg {
                                 slide.bg = Some(v);
-                            } else if in_sp_pr && !in_ln {
+                            } else if in_ln {
+                                if let Some(sh) = cur.as_mut() {
+                                    sh.ln_color = Some(v);
+                                }
+                            } else if in_sp_pr {
                                 if let Some(sh) = cur.as_mut() {
                                     if sh.fill.is_none() {
                                         sh.fill = Some(v);
                                     }
+                                }
+                            }
+                        }
+                    }
+                    // 线条主题色：<a:ln><a:solidFill><a:schemeClr val="accent1"/>
+                    "schemeClr" => {
+                        if in_ln {
+                            if let Some(v) = px_attr(&e, "val") {
+                                if let Some(sh) = cur.as_mut() {
+                                    sh.ln_color = Some(format!("scheme:{v}"));
                                 }
                             }
                         }
@@ -1208,6 +1257,7 @@ fn parse_pptx_slide(xml: &str) -> PxSlide {
                     }
                     "ph" => {
                         if let Some(sh) = cur.as_mut() {
+                            sh.is_ph = true;
                             for a in e.attributes().filter_map(|a| a.ok()) {
                                 if qname_local(a.key) == "type" {
                                     let v = String::from_utf8_lossy(&a.value).to_string();
@@ -1235,6 +1285,18 @@ fn parse_pptx_slide(xml: &str) -> PxSlide {
             Ok(quick_xml::events::Event::Empty(e)) => {
                 let local = qname_local(e.name());
                 match local.as_str() {
+                    "blip" => {
+                        if in_bg {
+                            if let Some(rid) = px_attr(&e, "embed") {
+                                slide.bg_rid = Some(rid);
+                            }
+                        }
+                    }
+                    "ph" => {
+                        if let Some(sh) = cur.as_mut() {
+                            sh.is_ph = true;
+                        }
+                    }
                     "rPr" => {
                         if let Some(r) = cur_run.as_mut() {
                             px_run_attrs(&e, r);
@@ -1248,11 +1310,25 @@ fn parse_pptx_slide(xml: &str) -> PxSlide {
                                 }
                             } else if in_bg {
                                 slide.bg = Some(v);
-                            } else if in_sp_pr && !in_ln {
+                            } else if in_ln {
+                                if let Some(sh) = cur.as_mut() {
+                                    sh.ln_color = Some(v);
+                                }
+                            } else if in_sp_pr {
                                 if let Some(sh) = cur.as_mut() {
                                     if sh.fill.is_none() {
                                         sh.fill = Some(v);
                                     }
+                                }
+                            }
+                        }
+                    }
+                    // 线条主题色：<a:ln><a:solidFill><a:schemeClr val="accent1"/>
+                    "schemeClr" => {
+                        if in_ln {
+                            if let Some(v) = px_attr(&e, "val") {
+                                if let Some(sh) = cur.as_mut() {
+                                    sh.ln_color = Some(format!("scheme:{v}"));
                                 }
                             }
                         }
@@ -1331,7 +1407,7 @@ fn parse_pptx_slide(xml: &str) -> PxSlide {
                     }
                 }
                 if let Some(d) = sptree_depth {
-                    if stack.len() == d + 2 && (local == "sp" || local == "pic") {
+                    if stack.len() == d + 2 && (local == "sp" || local == "pic" || local == "cxnSp") {
                         if local == "pic" {
                             if let (Some(start), Some(sh)) = (pic_start.take(), cur.as_mut()) {
                                 let end = reader.buffer_position() as usize;
@@ -1476,17 +1552,181 @@ fn slide_title_text(slide: &PxSlide) -> String {
         .unwrap_or_default()
 }
 
-/// 单张幻灯片 -> 富 HTML：960x540 画布内按 xfrm 绝对定位（近似 Office 原版式）。
+/// 形状渲染层来源：master / layout 装饰层或 slide 本层，各带自己的 rels 解析图片。
+struct PxLayer<'a> {
+    slide: &'a PxSlide,
+    rels: &'a HashMap<String, String>,
+    is_base: bool, // slide 本层：可编辑（contenteditable + 写回 shape 索引）
+}
+
+/// 从 rels 里定位 layout / master 部件的 zip 路径（如 ppt/slideLayouts/slideLayout1.xml）。
+fn related_part(rels: &HashMap<String, String>, keyword: &str) -> Option<String> {
+    for t in rels.values() {
+        if let Some(pos) = t.find(keyword) {
+            return Some(format!("ppt/{}", &t[pos..]));
+        }
+    }
+    None
+}
+
+/// 解析 ppt/theme/theme1.xml 的 clrScheme（accent1..9 / dk1 / lt1 / dk2 / lt2 等 -> 十六进制）。
+fn parse_theme_colors(zip: &mut zip::ZipArchive<Cursor<&[u8]>>) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let xml = match read_zip_string(zip, "ppt/theme/theme1.xml") {
+        Ok(s) => s,
+        Err(_) => return map,
+    };
+    let region = match (xml.find("<a:clrScheme"), xml.find("</a:clrScheme>")) {
+        (Some(s), Some(e)) if e > s => &xml[s..e],
+        _ => return map,
+    };
+    let mut reader = quick_xml::reader::Reader::from_str(region);
+    let mut cur_slot: Option<String> = None;
+    loop {
+        match reader.read_event() {
+            Ok(quick_xml::events::Event::Eof) => break,
+            Ok(quick_xml::events::Event::Start(e)) | Ok(quick_xml::events::Event::Empty(e)) => {
+                let local = qname_local(e.name());
+                match local.as_str() {
+                    "dk1" | "lt1" | "dk2" | "lt2" | "accent1" | "accent2" | "accent3"
+                    | "accent4" | "accent5" | "accent6" | "accent7" | "accent8" | "accent9"
+                    | "hlink" | "folHlink" => cur_slot = Some(local),
+                    "srgbClr" => {
+                        if let (Some(slot), Some(v)) = (cur_slot.as_ref(), px_attr(&e, "val")) {
+                            map.insert(slot.clone(), v);
+                        }
+                    }
+                    "sysClr" => {
+                        if let (Some(slot), Some(v)) =
+                            (cur_slot.as_ref(), px_attr(&e, "lastClr"))
+                        {
+                            map.insert(slot.clone(), v);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(quick_xml::events::Event::End(e)) => {
+                if qname_local(e.name()) != "srgbClr"
+                    && qname_local(e.name()) != "sysClr"
+                {
+                    cur_slot = None;
+                }
+            }
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    map
+}
+
+/// 解析颜色：`scheme:accent1` 查主题表，其余原样（十六进制）。
+fn resolve_color(theme: &HashMap<String, String>, c: &str) -> String {
+    if let Some(slot) = c.strip_prefix("scheme:") {
+        return theme
+            .get(slot)
+            .cloned()
+            .unwrap_or_else(|| "404040".to_string());
+    }
+    c.to_string()
+}
+
+/// 连接线/线条类 prstGeom -> 折线/曲线控制点（局部坐标，未含翻转）。
+fn connector_points(geom: &str, w: f64, h: f64) -> Option<(Vec<(f64, f64)>, &'static str)> {
+    // 返回 (关键点序列, SVG 指令模式)：L=折线，Q=二次曲线，C=三次曲线
+    let pts = match geom {
+        "straightConnector1" | "line" => vec![(0.0, 0.0), (w, h)],
+        "curvedConnector2" => vec![(0.0, 0.0), (w, 0.0), (w, h)],
+        "curvedConnector3" | "curvedConnector4" | "curvedConnector5" => {
+            vec![(0.0, 0.0), (w / 2.0, 0.0), (w / 2.0, h), (w, h)]
+        }
+        "bentConnector2" => vec![(0.0, 0.0), (w, 0.0), (w, h)],
+        "bentConnector3" | "bentConnector4" | "bentConnector5" => {
+            vec![(0.0, 0.0), (w / 2.0, 0.0), (w / 2.0, h), (w, h)]
+        }
+        _ => return None,
+    };
+    let mode = if geom.starts_with("curvedConnector2") {
+        "Q"
+    } else if geom.starts_with("curvedConnector") {
+        "C"
+    } else {
+        "L"
+    };
+    Some((pts, mode))
+}
+
+/// 连接线 shape -> 绝对定位 SVG（描边色/线宽取自 a:ln，零宽/高线自动撑开保证可见）。
+fn connector_svg(
+    sh: &PxShape,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    sx: f64,
+    theme: &HashMap<String, String>,
+) -> String {
+    let geom = sh.geom.as_deref().unwrap_or("straightConnector1");
+    let stroke = resolve_color(theme, sh.ln_color.as_deref().unwrap_or("404040"));
+    let sw = sh.ln_w.map(|v| v as f64 * sx).unwrap_or(1.5).max(0.8);
+    let vw = w.max(sw);
+    let vh = h.max(sw);
+    let mut path = String::new();
+    if let Some((pts, mode)) = connector_points(geom, w, h) {
+        let mapped: Vec<(f64, f64)> = pts
+            .iter()
+            .map(|&(px, py)| {
+                let px = if sh.flip_h { w - px } else { px };
+                let py = if sh.flip_v { h - py } else { py };
+                // 零尺寸方向：坐标收拢到半线宽处（viewBox 已撑开）
+                let px = if w == 0.0 { sw / 2.0 } else { px };
+                let py = if h == 0.0 { sw / 2.0 } else { py };
+                (px, py)
+            })
+            .collect();
+        path.push_str(&format!("M {:.2} {:.2}", mapped[0].0, mapped[0].1));
+        match mode {
+            "L" => {
+                for p in &mapped[1..] {
+                    path.push_str(&format!(" L {:.2} {:.2}", p.0, p.1));
+                }
+            }
+            "Q" => {
+                path.push_str(&format!(
+                    " Q {:.2} {:.2} {:.2} {:.2}",
+                    mapped[1].0, mapped[1].1, mapped[2].0, mapped[2].1
+                ));
+            }
+            _ => {
+                path.push_str(&format!(
+                    " C {:.2} {:.2} {:.2} {:.2} {:.2} {:.2}",
+                    mapped[1].0, mapped[1].1, mapped[2].0, mapped[2].1, mapped[3].0, mapped[3].1
+                ));
+            }
+        }
+    } else {
+        path.push_str(&format!("M 0 0 L {w:.2} {h:.2}"));
+    }
+    let style = format!(
+        "position:absolute;left:{x:.1}px;top:{y:.1}px;width:{vw:.1}px;height:{vh:.1}px;overflow:visible;"
+    );
+    format!(
+        "<svg class=\"px-deco\" style=\"{style}\" viewBox=\"0 0 {vw:.2} {vh:.2}\" fill=\"none\"><path d=\"{path}\" stroke=\"#{stroke}\" stroke-width=\"{sw:.2}\"/></svg>"
+    )
+}
+
+/// 单张幻灯片 -> 富 HTML：master/layout 装饰层 + slide 层叠加，960x540 画布内按 xfrm 绝对定位。
 fn slide_to_html(
-    slide: &PxSlide,
+    layers: &[PxLayer],
+    bg_style: String,
     zip: &mut zip::ZipArchive<Cursor<&[u8]>>,
-    rels: &HashMap<String, String>,
     sld_cx: i64,
     sld_cy: i64,
+    theme: &HashMap<String, String>,
 ) -> String {
     let sx = if sld_cx > 0 { 960.0 / sld_cx as f64 } else { 960.0 / 12192000.0 };
     let sy = if sld_cy > 0 { 540.0 / sld_cy as f64 } else { 540.0 / 6858000.0 };
-    let mut resolve = |rid: &str| -> Option<String> {
+    let mut resolve = |rels: &HashMap<String, String>, rid: &str| -> Option<String> {
         let target = rels.get(rid)?;
         let base = Path::new(target).file_name()?;
         let full = format!("ppt/media/{}", base.to_string_lossy());
@@ -1499,89 +1739,136 @@ fn slide_to_html(
             base64::engine::general_purpose::STANDARD.encode(&buf)
         ))
     };
-    let bg_style = slide
-        .bg
-        .as_ref()
-        .map(|c| format!("background:#{};", c))
-        .unwrap_or_default();
     let mut out = format!("<div class=\"px-canvas\" style=\"{}\">", bg_style);
-    for (shape_idx, sh) in slide.shapes.iter().enumerate() {
-        if sh.is_pic {
-            if let Some(uri) = resolve(&sh.pic_rid) {
-                let style = match (sh.x, sh.y, sh.w, sh.h) {
-                    (Some(x), Some(y), Some(w), Some(h)) => format!(
-                        "position:absolute;left:{:.1}px;top:{:.1}px;width:{:.1}px;height:{:.1}px;object-fit:contain;",
+    for layer in layers {
+        for (shape_idx, sh) in layer.slide.shapes.iter().enumerate() {
+            // layout/master 层的占位符是提示文本模板，不渲染
+            if !layer.is_base && sh.is_ph {
+                continue;
+            }
+            if sh.is_pic {
+                if let Some(uri) = resolve(layer.rels, &sh.pic_rid) {
+                    let style = match (sh.x, sh.y, sh.w, sh.h) {
+                        (Some(x), Some(y), Some(w), Some(h)) => format!(
+                            "position:absolute;left:{:.1}px;top:{:.1}px;width:{:.1}px;height:{:.1}px;object-fit:contain;",
+                            x as f64 * sx,
+                            y as f64 * sy,
+                            w as f64 * sx,
+                            h as f64 * sy
+                        ),
+                        _ => String::new(),
+                    };
+                    if layer.is_base {
+                        out.push_str(&format!(
+                            "<img class=\"px-img\" data-rid=\"{}\" style=\"{}\" src=\"{}\"/>",
+                            sh.pic_rid, style, uri
+                        ));
+                    } else {
+                        out.push_str(&format!(
+                            "<img class=\"px-img px-deco\" style=\"{}\" src=\"{}\"/>",
+                            style, uri
+                        ));
+                    }
+                }
+                continue;
+            }
+            // 连接线/线条形状（cxnSp 等）：SVG 渲染，不可编辑、不参与写回
+            if sh
+                .geom
+                .as_deref()
+                .map(|g| connector_points(g, 1.0, 1.0).is_some())
+                .unwrap_or(false)
+            {
+                if let (Some(x), Some(y), Some(w), Some(h)) = (sh.x, sh.y, sh.w, sh.h) {
+                    out.push_str(&connector_svg(
+                        sh,
                         x as f64 * sx,
                         y as f64 * sy,
                         w as f64 * sx,
-                        h as f64 * sy
-                    ),
-                    _ => String::new(),
-                };
-                out.push_str(&format!(
-                    "<img class=\"px-img\" data-rid=\"{}\" style=\"{}\" src=\"{}\"/>",
-                    sh.pic_rid, style, uri
-                ));
-            }
-            continue;
-        }
-        let mut body = String::new();
-        let mut in_list = false;
-        for p in &sh.paras {
-            if p.runs.iter().all(|r| r.text.trim().is_empty()) {
+                        h as f64 * sy,
+                        sx,
+                        theme,
+                    ));
+                }
                 continue;
             }
-            let inner: String = p.runs.iter().map(px_run_html).collect();
-            let align = px_algn(p.algn.as_deref());
-            if p.bullet {
-                if !in_list {
-                    body.push_str("<ul>");
-                    in_list = true;
+            let mut body = String::new();
+            let mut in_list = false;
+            for p in &sh.paras {
+                if p.runs.iter().all(|r| r.text.trim().is_empty()) {
+                    continue;
                 }
-                body.push_str(&format!("<li style=\"{}\">{}</li>", align, inner));
-            } else {
-                if in_list {
-                    body.push_str("</ul>");
-                    in_list = false;
+                let inner: String = p.runs.iter().map(px_run_html).collect();
+                let align = px_algn(p.algn.as_deref());
+                if p.bullet {
+                    if !in_list {
+                        body.push_str("<ul>");
+                        in_list = true;
+                    }
+                    body.push_str(&format!("<li style=\"{}\">{}</li>", align, inner));
+                } else {
+                    if in_list {
+                        body.push_str("</ul>");
+                        in_list = false;
+                    }
+                    body.push_str(&format!("<p style=\"{}\">{}</p>", align, inner));
                 }
-                body.push_str(&format!("<p style=\"{}\">{}</p>", align, inner));
             }
-        }
-        if in_list {
-            body.push_str("</ul>");
-        }
-        if body.is_empty() && sh.fill.is_none() {
-            continue;
-        }
-        match (sh.x, sh.y, sh.w, sh.h) {
-            (Some(x), Some(y), Some(w), Some(h)) => {
-                let mut style = format!(
-                    "left:{:.1}px;top:{:.1}px;width:{:.1}px;height:{:.1}px;",
+            if in_list {
+                body.push_str("</ul>");
+            }
+            if body.is_empty() && sh.fill.is_none() {
+                continue;
+            }
+            let pos = match (sh.x, sh.y, sh.w, sh.h) {
+                (Some(x), Some(y), Some(w), Some(h)) => Some((
                     x as f64 * sx,
                     y as f64 * sy,
                     w as f64 * sx,
-                    h as f64 * sy
+                    h as f64 * sy,
+                )),
+                _ => None,
+            };
+            if layer.is_base {
+                let (idx_attr, editable) = (
+                    format!("data-shp-idx=\"{}\"", shape_idx),
+                    " contenteditable=\"true\" spellcheck=\"false\" tabindex=\"0\"",
                 );
-                if let Some(f) = &sh.fill {
-                    style.push_str(&format!("background:#{};", f));
+                match pos {
+                    Some((x, y, w, h)) => {
+                        let mut style = format!("left:{x:.1}px;top:{y:.1}px;width:{w:.1}px;height:{h:.1}px;");
+                        if let Some(f) = &sh.fill {
+                            style.push_str(&format!("background:#{};", f));
+                        }
+                        if sh.anchor_ctr {
+                            style.push_str("display:flex;flex-direction:column;justify-content:center;");
+                        }
+                        out.push_str(&format!(
+                            "<div class=\"px-shape\" {idx_attr}{editable} style=\"{style}\">{body}</div>"
+                        ));
+                    }
+                    _ => {
+                        let mut style = String::new();
+                        if let Some(f) = &sh.fill {
+                            style.push_str(&format!("background:#{};", f));
+                        }
+                        out.push_str(&format!(
+                            "<div class=\"px-shape px-flow\" {idx_attr}{editable} style=\"{style}\">{body}</div>"
+                        ));
+                    }
                 }
-                if sh.anchor_ctr {
-                    style.push_str("display:flex;flex-direction:column;justify-content:center;");
+            } else {
+                // 装饰层形状：仅展示（纯色块近似），不可编辑、不参与写回
+                if let Some((x, y, w, h)) = pos {
+                    let mut style =
+                        format!("left:{x:.1}px;top:{y:.1}px;width:{w:.1}px;height:{h:.1}px;");
+                    if let Some(f) = &sh.fill {
+                        style.push_str(&format!("background:#{};", f));
+                    }
+                    out.push_str(&format!(
+                        "<div class=\"px-shape px-deco\" style=\"{style}\">{body}</div>"
+                    ));
                 }
-                out.push_str(&format!(
-                    "<div class=\"px-shape\" data-shp-idx=\"{}\" contenteditable=\"true\" spellcheck=\"false\" tabindex=\"0\" style=\"{}\">{}</div>",
-                    shape_idx, style, body
-                ));
-            }
-            _ => {
-                let mut style = String::new();
-                if let Some(f) = &sh.fill {
-                    style.push_str(&format!("background:#{};", f));
-                }
-                out.push_str(&format!(
-                    "<div class=\"px-shape px-flow\" data-shp-idx=\"{}\" contenteditable=\"true\" spellcheck=\"false\" tabindex=\"0\" style=\"{}\">{}</div>",
-                    shape_idx, style, body
-                ));
             }
         }
     }
@@ -1794,14 +2081,82 @@ pub fn pptx_slide_data(input: &[u8], index: usize) -> Result<PptxSlideData, Stri
     let slide = parse_pptx_slide(&xml);
     let rels_name = format!("ppt/slides/_rels/slide{}.xml.rels", index + 1);
     let rels = read_rels(&mut zip, &rels_name).unwrap_or_default();
+
+    // 继承链：slide -> slideLayout -> slideMaster。模板装饰图形（水彩/泼墨等）
+    // 与背景图通常挂在 layout/master 的非占位符形状或 bg blipFill 上。
+    let mut master_slide: Option<PxSlide> = None;
+    let mut master_rels: HashMap<String, String> = HashMap::new();
+    let mut layout_slide: Option<PxSlide> = None;
+    let mut layout_rels: HashMap<String, String> = HashMap::new();
+
+    if let Some(lp) = related_part(&rels, "slideLayouts/") {
+        if let Ok(lxml) = read_zip_string(&mut zip, &lp) {
+            let lrel = format!(
+                "ppt/slideLayouts/_rels/{}.rels",
+                Path::new(&lp).file_name().unwrap_or_default().to_string_lossy()
+            );
+            layout_rels = read_rels(&mut zip, &lrel).unwrap_or_default();
+            layout_slide = Some(parse_pptx_slide(&lxml));
+            if let Some(mp) = related_part(&layout_rels, "slideMasters/") {
+                if let Ok(mxml) = read_zip_string(&mut zip, &mp) {
+                    let mrel = format!(
+                        "ppt/slideMasters/_rels/{}.rels",
+                        Path::new(&mp).file_name().unwrap_or_default().to_string_lossy()
+                    );
+                    master_rels = read_rels(&mut zip, &mrel).unwrap_or_default();
+                    master_slide = Some(parse_pptx_slide(&mxml));
+                }
+            }
+        }
+    }
+
     // 画布尺寸：读 presentation.xml 的 sldSz（EMU），按比例缩放到 960x540
     let pres = read_zip_string(&mut zip, "ppt/presentation.xml").unwrap_or_default();
     let (sld_cx, sld_cy) = parse_sld_sz(&pres);
+
+    // 背景：slide > layout > master，背景图（blipFill）优先于纯色
+    let mut bg_style = String::new();
+    let mut bg_srcs: Vec<(&PxSlide, &HashMap<String, String>)> = Vec::new();
+    if let Some(m) = &master_slide {
+        bg_srcs.push((m, &master_rels));
+    }
+    if let Some(l) = &layout_slide {
+        bg_srcs.push((l, &layout_rels));
+    }
+    bg_srcs.push((&slide, &rels));
+    for (s, r) in bg_srcs.iter().rev() {
+        if let Some(rid) = &s.bg_rid {
+            if let Some((uri, _)) = px_media_uri(&mut zip, r, rid) {
+                bg_style = format!(
+                    "background-image:url('{uri}');background-size:cover;background-position:center;"
+                );
+            }
+            break;
+        }
+        if let Some(c) = &s.bg {
+            bg_style = format!("background:#{c};");
+            break;
+        }
+    }
+
+    // 渲染层叠顺序：master -> layout -> slide
+    let mut layers: Vec<PxLayer> = Vec::new();
+    if let Some(m) = &master_slide {
+        layers.push(PxLayer { slide: m, rels: &master_rels, is_base: false });
+    }
+    if let Some(l) = &layout_slide {
+        layers.push(PxLayer { slide: l, rels: &layout_rels, is_base: false });
+    }
+    layers.push(PxLayer { slide: &slide, rels: &rels, is_base: true });
+
+    // 主题色表（连接线描边常用 schemeClr accent1 等）
+    let theme = parse_theme_colors(&mut zip);
+
     Ok(PptxSlideData {
         index,
         title: slide_title_text(&slide),
         text: slide_plain_text(&slide),
-        html: slide_to_html(&slide, &mut zip, &rels, sld_cx, sld_cy),
+        html: slide_to_html(&layers, bg_style, &mut zip, sld_cx, sld_cy, &theme),
     })
 }
 

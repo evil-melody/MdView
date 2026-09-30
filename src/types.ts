@@ -25,6 +25,53 @@ export interface ChatMessage {
   content: string
 }
 
+/** 单文件 AI 摘要缓存记录（后端持久化在 config_dir/MdView/summaries.json） */
+export interface SummaryRecord {
+  summary: string
+  model: string
+  /** 生成时间（unix 秒） */
+  ts: number
+  /** 生成时的 size:mtime 指纹，文件改动后失效 */
+  fingerprint: string
+}
+
+/** 图片索引记录（dHash 感知哈希，后端持久化在 config_dir/MdView/image-index.json） */
+export interface ImageRecord {
+  path: string
+  name: string
+  size: number
+  modified: string
+  width: number
+  height: number
+  /** dHash 指纹（十进制字符串化的 u64，仅用于传输） */
+  hash: number
+  fingerprint: string
+  ts: number
+}
+
+/** 一组相似图片 */
+export interface SimilarGroup {
+  items: ImageRecord[]
+  /** 组内最大汉明距离（0 = 完全一致） */
+  max_distance: number
+}
+
+/** 图片索引扫描进度事件负载 */
+export interface ImageIndexProgress {
+  id: string
+  done: number
+  total: number
+  path: string
+}
+
+/** 批量摘要任务的单文件结果 */
+export interface SummaryResult {
+  path: string
+  summary: string
+  error: string | null
+  cached: boolean
+}
+
 export type ViewTab = 'preview' | 'edit' | 'mindmap'
 
 export interface NewFileType {

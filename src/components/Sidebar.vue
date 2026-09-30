@@ -15,6 +15,7 @@ const emit = defineEmits<{
   (e: 'ai-action', action: string): void
   (e: 'add-root'): void
   (e: 'new-file'): void
+  (e: 'refresh'): void
   (e: 'collapse'): void
   (e: 'open-entry', entry: FileEntry): void
   (e: 'entry-context', entry: FileEntry, ev: MouseEvent): void
@@ -115,6 +116,26 @@ function focusSearch(e: MouseEvent) {
               <path d="M12 12v6" />
             </svg>
           </button>
+          <button class="add-btn" title="刷新（左侧树 / 右侧列表 / 索引）" @click.stop="emit('refresh')">
+            <!-- Lucide refresh-cw -->
+            <svg
+              class="ab-ico"
+              width="13"
+              height="13"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+              <path d="M21 3v5h-5" />
+              <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+              <path d="M3 21v-5h5" />
+            </svg>
+          </button>
           <button class="add-btn" title="管理资料库（添加 / 移除目录）" @click.stop="emit('manage-roots')">＋</button>
         </span>
       </div>
@@ -122,7 +143,9 @@ function focusSearch(e: MouseEvent) {
         class="kb-tree"
         :roots="state.config.scan_roots"
         :active-path="state.currentDir"
+        :filter="state.searchQuery"
         @open-file="(e) => emit('open-entry', e)"
+        @open-dir="(e) => emit('open-entry', e)"
         @add-root="emit('add-root')"
         @tree-context="(e, ev) => emit('entry-context', e, ev)"
       />
@@ -150,6 +173,10 @@ function focusSearch(e: MouseEvent) {
       </div>
 
       <div class="section-label">工具</div>
+      <div class="nav-item" :class="{ active: state.page === 'similar' }" @click="emit('navigate', 'similar')">
+        <span class="ni">🖼</span><span class="nl">相似图片</span>
+        <span class="count" v-if="state.imageIndexed">{{ state.imageIndexed }}</span>
+      </div>
       <div class="nav-item" :class="{ active: state.page === 'help' }" @click="emit('navigate', 'help')">
         <span class="ni">📖</span><span class="nl">帮助文档</span>
       </div>

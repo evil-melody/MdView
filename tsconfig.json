@@ -3,7 +3,8 @@
     "target": "ES2021",
     "useDefineForClassFields": true,
     "module": "ESNext",
-    "lib": ["ES2021", "DOM", "DOM.Iterable"],
+    /** ES2022: GenOffice docx-engine/zip-gate 用到 Array.prototype.at 与 Error cause */
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "skipLibCheck": true,
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
@@ -14,7 +15,23 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "esModuleInterop": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    /**
+     * 与 vite.config.ts 的 resolve.alias 保持一致：GenOffice 引擎以源码形式 vendored 在
+     * src/vendor/genoffice，其内部用包名互相引用，TS 侧必须有同样的映射才能解析类型。
+     */
+    "paths": {
+      "@genoffice/pptx-engine": ["./src/vendor/genoffice/pptx-engine/src/index.ts"],
+      "@genoffice/pptx-engine/*": ["./src/vendor/genoffice/pptx-engine/src/*"],
+      "@genoffice/docx-engine": ["./src/vendor/genoffice/docx-engine/src/index.ts"],
+      "@genoffice/docx-engine/*": ["./src/vendor/genoffice/docx-engine/src/*"],
+      "@genoffice/zip-gate": ["./src/vendor/genoffice/zip-gate/src/index.ts"],
+      "@genoffice/zip-gate/*": ["./src/vendor/genoffice/zip-gate/src/*"],
+      "@genoffice/pptx-render": ["./src/vendor/genoffice/pptx-render/src/index.ts"],
+      "@genoffice/pptx-render/*": ["./src/vendor/genoffice/pptx-render/src/*"],
+      "@genoffice/pptx-ops": ["./src/vendor/genoffice/pptx-ops/src/index.ts"],
+      "@genoffice/pptx-ops/*": ["./src/vendor/genoffice/pptx-ops/src/*"]
+    }
   },
   "include": ["src"],
   "references": [{ "path": "./tsconfig.node.json" }]

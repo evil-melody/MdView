@@ -134,7 +134,7 @@ async function replaceImage() {
   if (typeof picked !== 'string' || !picked) return
   saving.value = true
   try {
-    const bytes = await readFileBytes(picked)
+    const bytes = Array.from(new Uint8Array(await readFileBytes(picked)))
     await replacePptxImage(props.path, target.slideIndex, target.rid, bytes)
     emit('change')
   } catch (e: any) {
@@ -152,7 +152,7 @@ async function insertImage() {
   if (typeof picked !== 'string' || !picked) return
   saving.value = true
   try {
-    const bytes = await readFileBytes(picked)
+    const bytes = Array.from(new Uint8Array(await readFileBytes(picked)))
     exec('slide.command.insert-float-image', { file: bytes })
   } catch (e: any) {
     errText.value = '插入图片失败：' + (e?.message || String(e))

@@ -472,3 +472,61 @@
   background: var(--accent);
   border-color: var(--accent);
 }
+
+/* AI 摘要：批量任务进度条 + 列表/卡片摘要文案 */
+.sum-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 20px 8px;
+}
+
+.sum-bar-wrap {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+
+.sum-bar {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 0.18s ease;
+}
+
+.sum-text {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.sum-btn {
+  white-space: nowrap;
+}
+
+.card-sum,
+.row-sum {
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-sum {
+  margin-top: 5px;
+  padding-left: 7px;
+  border-left: 2px solid var(--accent-soft);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
+}
+
+.row-sum {
+  flex: 1;
+  min-width: 0;
+}

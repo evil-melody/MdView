@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, defineAsyncComponent, h } from 'vue'
+import { ref, computed, watch, nextTick, defineAsyncComponent, h } from 'vue'
 import type { FileEntry, ViewTab } from '../types'
 import type { OpenTab } from '../store'
 import type { MarkdownHeading } from '../utils/markdown'
@@ -12,6 +12,7 @@ import CodeEditor from './CodeEditor.vue'
 import FileIcon from './FileIcon.vue'
 import { viewerTypeFor, officeEditable } from '../utils/viewer'
 import { isCodeFile } from '../utils/codeLang'
+import { clipboardImageBlob, saveClipboardImage } from '../utils/pasteImage'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import type { TabViewer } from '../store'
 
@@ -38,6 +39,7 @@ const emit = defineEmits<{
   (e: 'close-tab', path: string): void
   (e: 'open-ai'): void
   (e: 'dirty'): void
+  (e: 'image-saved'): void
 }>()
 
 const tab = ref<ViewTab>('preview')
@@ -143,6 +145,32 @@ function onDocEditorError(msg: string) {
 
 function dismissEditorError() {
   editorErr.value = ''
+}
+
+/**
+ * Markdown 编辑器粘贴截图：图片落盘到文档同目录，正文光标处插入相对路径引用。
+ * 非图片粘贴不拦截，交回浏览器默认行为。
+ */
+async function onPasteImage(ev: ClipboardEvent) {
+  const el = ev.target as HTMLTextAreaElement
+  const blob = clipboardImageBlob(ev)
+  if (!blob || !props.entry) return
+  const dir = props.entry.path.replace(/[/\\][^/\\]*$/, '')
+  if (!dir) return
+  ev.preventDefault()
+  try {
+    const name = await saveClipboardImage(dir, blob)
+    emit('image-saved')
+    const snippet = `![${name}](./${name})`
+    const start = el.selectionStart ?? el.value.length
+    const end = el.selectionEnd ?? start
+    emit('update:content', el.value.slice(0, start) + snippet + el.value.slice(end))
+    await nextTick()
+    el.focus()
+    el.selectionStart = el.selectionEnd = start + snippet.length
+  } catch (e) {
+    onDocEditorError(String(e))
+  }
 }
 
 /** pptx 自动保存由 PptxInlineEditor 在失焦时完成；保存按钮仅清脏标记 */
@@ -304,6 +332,7 @@ defineExpose({ exportOffice, commitPptx })
               class="editor scrollable"
               :value="content"
               @input="emit('update:content', ($event.target as HTMLTextAreaElement).value)"
+              @paste="onPasteImage"
               spellcheck="false"
             ></textarea>
             <div class="editor-live flex1">
