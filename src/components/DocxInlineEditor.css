@@ -90,6 +90,15 @@
   margin: 10px 0;
 }
 
+/* 分页符（\f）：Word 式虚线分页指示 */
+.dxe-canvas :deep(.docx-pagebreak) {
+  display: block;
+  height: 0;
+  border-top: 1px dashed #b8bec7;
+  margin: 14px 0;
+  position: relative;
+}
+
 .dxe-loading {
   position: absolute;
   inset: 0;

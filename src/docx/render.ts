@@ -41,10 +41,15 @@ function renderRun(run: any, i: number): string {
     const src = run.image.dataUrl ?? ''
     return `<img class="docx-img" data-img="${i}" src="${src}"${w}${h}${alt}>`
   }
-  const text = escapeHtml(run.text ?? '').replace(/\n/g, '<br>')
-  if (!text) return ''
+  const raw = run.text ?? ''
+  if (!raw) return ''
   const style = runStyle(run)
-  return `<span style="${style}">${text}</span>`
+  // \f = 分页符（w:br type=page 的文本形态）：渲染为分页指示线，避免 WebKit 显示为 tofu ⊠；
+  // \n = 软换行 → <br>
+  const html = escapeHtml(raw)
+    .replace(/\f/g, '<span class="docx-pagebreak" title="分页符"></span>')
+    .replace(/\n/g, '<br>')
+  return `<span style="${style}">${html}</span>`
 }
 
 function renderParagraph(block: any): string {
