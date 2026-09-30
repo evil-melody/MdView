@@ -1,0 +1,89 @@
+.dtb-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.dtb-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.dtb-btn {
+  flex-shrink: 0;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dtb-btn:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.dtb-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.dtb-btn i {
+  font-style: italic;
+  font-family: Georgia, serif;
+}
+
+.dtb-sel {
+  flex-shrink: 0;
+  height: 28px;
+  min-width: 90px;
+  padding: 0 22px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+  appearance: auto;
+}
+
+.dtb-sel-font {
+  min-width: 120px;
+}
+
+.dtb-sel-size {
+  min-width: 70px;
+}
+
+.dtb-color {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.dtb-sep {
+  flex-shrink: 0;
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 4px;
+}

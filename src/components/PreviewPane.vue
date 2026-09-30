@@ -6,7 +6,7 @@ import type { MarkdownHeading } from '../utils/markdown'
 import MdPreview from './MdPreview.vue'
 import MindmapView from './MindmapView.vue'
 import BinaryViewer from './BinaryViewer.vue'
-import OfficeDocInlineEditor from './OfficeDocInlineEditor.vue'
+import DocxInlineEditor from './DocxInlineEditor.vue'
 import PptxInlineEditor from './PptxInlineEditor.vue'
 import CodeEditor from './CodeEditor.vue'
 import FileIcon from './FileIcon.vue'
@@ -46,11 +46,14 @@ const tab = ref<ViewTab>('preview')
 const outlineOpen = ref(false)
 /** 编辑器报错文案：明确展示原因便于定位 */
 const editorErr = ref('')
+/** docx 原生编辑器解析失败时回退到纯文本编辑（不回退 vue-files-preview，避免双 Vue 崩溃） */
+const docxNativeFailed = ref(false)
 // immediate：新建文件后 PreviewPane 首次挂载时也要命中 editOnOpen 直接进编辑
 watch(
   () => props.entry?.path,
   (p) => {
     editorErr.value = ''
+    docxNativeFailed.value = false
     if (p && p === props.editOnOpen) tab.value = 'edit'
   },
   { immediate: true }
@@ -130,17 +133,32 @@ function scrollTo(id: string) {
 
 /** xlsx 编辑器实例，供保存时导出原生二进制 */
 const officeRef = ref<any>(null)
+/** docx 原生编辑器实例，导出原生 .docx 字节 */
+const docxRef = ref<any>(null)
 
-/** 保存时取回编辑器内容：仅 xlsx 走原生 base64，docx/pptx 已实时同步 */
-async function exportOffice(): Promise<string | null> {
-  if (!isDocx.value) {
-    return (await officeRef.value?.exportBase64?.()) ?? null
+/** Uint8Array → base64（docx 原生字节经 write_binary_base64 落盘） */
+function bytesToBase64(bytes: Uint8Array): string {
+  let bin = ''
+  const chunk = 0x8000
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)))
   }
-  return null
+  return btoa(bin)
+}
+
+/** 保存时取回编辑器内容：docx 走原生 .docx 字节，xlsx 走原生 base64 */
+async function exportOffice(): Promise<string | null> {
+  if (isDocx.value) {
+    const bytes = await docxRef.value?.exportDocx?.()
+    return bytes ? bytesToBase64(bytes) : null
+  }
+  return (await officeRef.value?.exportBase64?.()) ?? null
 }
 
 function onDocEditorError(msg: string) {
   editorErr.value = msg
+  // docx 原生解析失败 → 切回 Markdown 枢纽编辑器兜底
+  docxNativeFailed.value = true
 }
 
 function dismissEditorError() {
@@ -258,8 +276,18 @@ defineExpose({ exportOffice, commitPptx })
       <template v-else-if="canEdit">
         <div class="content-area">
           <div v-if="tab === 'preview'" class="flex1">
-            <!-- docx/xlsx：富渲染预览（vue-files-preview） -->
-            <BinaryViewer v-if="isOffice && !isPptx" :entry="entry" :viewer="viewer" />
+            <!-- docx：原生渲染（只读预览）。脱离 vue-files-preview/@vue-office/docx 的
+                 双 Vue 实例冲突（其预编译产物硬编码 vue@3.5.28，与应用 vue@3.5.13 不兼容，
+                 导致 instance.update/vnode.shapeFlag/component.emitsOptions 级联崩溃） -->
+            <DocxInlineEditor
+              v-if="isDocx"
+              :readonly="true"
+              :key="entry!.path"
+              :path="entry!.path"
+              @error="onDocEditorError"
+            />
+            <!-- xlsx：vue-files-preview 渲染 -->
+            <BinaryViewer v-else-if="isOffice && !isPptx" :entry="entry" :viewer="viewer" />
             <!-- pptx：预览与编辑同款渲染（vue-files-preview 在该场景下易卡死，故用同款 HTML） -->
             <PptxInlineEditor
               v-else-if="isPptx"
@@ -276,15 +304,23 @@ defineExpose({ exportOffice, commitPptx })
             <pre v-else class="code-view scrollable">{{ codePreview }}</pre>
           </div>
           <div v-else-if="tab === 'edit' && isOffice" class="flex1">
-            <!-- docx：预览同款 HTML 渲染 + contenteditable + 工具栏 -->
-            <OfficeDocInlineEditor
-              v-if="isDocx"
+            <!-- docx：原生编辑（自绘受控 DOM + 图片/表格 + 原生 .docx 保存） -->
+            <DocxInlineEditor
+              v-if="isDocx && !docxNativeFailed"
+              ref="docxRef"
               :key="entry!.path"
-              :src="convertFileSrc(entry!.path)"
+              :path="entry!.path"
               @change="emit('dirty')"
-              @update:content="(v: string) => emit('update:content', v)"
               @error="onDocEditorError"
             />
+            <!-- docx 原生解析失败兜底：纯文本编辑（不回退 vue-files-preview，避免双 Vue 崩溃） -->
+            <textarea
+              v-else-if="isDocx"
+              class="editor scrollable full"
+              :value="content"
+              @input="emit('update:content', ($event.target as HTMLTextAreaElement).value)"
+              spellcheck="false"
+            ></textarea>
             <!-- csv/tsv：文本方式编辑（CodeEditor），保存直接写回原文件 -->
             <CodeEditor
               v-else-if="isCsvLike"

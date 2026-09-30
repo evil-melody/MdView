@@ -1,0 +1,119 @@
+.dxe {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  background: var(--bg-1, #f5f6f8);
+}
+
+.dxe-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.dxe-canvas {
+  max-width: 820px;
+  margin: 24px auto;
+  padding: 48px 56px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  color: #1f2329;
+  font-family: -apple-system, "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-size: 15px;
+  line-height: 1.7;
+  outline: none;
+}
+
+/* 受控 DOM 由运行时 innerHTML 注入，scoped 样式需 :deep 才能命中 */
+.dxe-canvas :deep(p[data-bid]) {
+  outline: none;
+  border-radius: 3px;
+  padding: 1px 2px;
+}
+
+.dxe-canvas :deep(p[data-bid]:focus) {
+  background: rgba(29, 78, 216, 0.06);
+}
+
+.dxe-canvas :deep(.docx-h1) {
+  font-size: 26px;
+  font-weight: 700;
+  margin: 18px 0 10px;
+}
+.dxe-canvas :deep(.docx-h2) {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 16px 0 8px;
+}
+.dxe-canvas :deep(.docx-h3) {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 14px 0 6px;
+}
+.dxe-canvas :deep(.docx-h4),
+.dxe-canvas :deep(.docx-h5),
+.dxe-canvas :deep(.docx-h6) {
+  font-weight: 700;
+  margin: 12px 0 6px;
+}
+.dxe-canvas :deep(.docx-p),
+.dxe-canvas :deep(.docx-li) {
+  margin: 6px 0;
+}
+
+.dxe-canvas :deep(.docx-table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 10px 0;
+  table-layout: fixed;
+}
+.dxe-canvas :deep(.docx-td) {
+  border: 1px solid #cfd4da;
+  padding: 6px 8px;
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.dxe-canvas :deep(.docx-img),
+.dxe-canvas :deep(.docx-img-block img) {
+  max-width: 100%;
+  height: auto;
+}
+.dxe-canvas :deep(.docx-img-block) {
+  text-align: center;
+  margin: 10px 0;
+}
+
+.dxe-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-3);
+  font-size: 13px;
+  background: var(--bg-1, #f5f6f8);
+}
+
+.dxe-spinner {
+  width: 26px;
+  height: 26px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: dxe-spin 0.8s linear infinite;
+}
+
+@keyframes dxe-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
