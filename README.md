@@ -13,7 +13,7 @@
 
 ## 这是什么
 
-**MdView** 是一个纯本地的桌面文件工作台：把你的资料库目录索引成可分类浏览的文件库，Markdown / Word / Excel / PPT / PDF / 图片在一个窗口内预览、编辑与管理，并可选接入远程 AI（OpenAI 兼容接口）做流式摘要与打标。不依赖任何在线服务，文件不出本机。
+**MdView** 是一个纯本地的桌面文件工作台：把你的资料库目录索引成可分类浏览的文件库，Markdown / Word / Excel / PPT / PDF / 图片在一个窗口内预览、编辑与管理，并可选接入远程 AI（OpenAI 兼容接口）做流式摘要、批量打标与相似图片归组。不依赖任何在线服务，文件不出本机。
 
 <p align="center">
   <img src="./assets/readme/workflow.svg" width="100%" alt="工作流：扫描资料库 → 分类导航 → 多页签预览编辑 → 保存写回原格式，全程可调用远程 AI">
@@ -29,16 +29,18 @@
 - 本地图片相对路径自动解析，离线可用
 
 ### 全格式文件支持
-| 类型 | 预览 | 编辑 | 说明 |
+| 类型 | 预览 | 编辑 | 引擎 / 说明 |
 |---|---|---|---|
-| Markdown / 文本 / 代码 | ✅ | ✅ | 语法渲染 + 文本编辑 |
-| Word（docx） | ✅ 富渲染 | ✅ 原生编辑 | canvas-editor，保存写回 docx，**保留图片与格式** |
-| Excel（xlsx / csv） | ✅ 富渲染 | ✅ 原生编辑 | Univer 表格，值 / 公式 / 样式 / 列宽往返 |
-| PPT（pptx） | ✅ | — | 只读预览 |
+| Markdown / 文本 / 代码 | ✅ | ✅ | marked 渲染 + CodeMirror 高亮编辑 |
+| Word（docx） | ✅ 富渲染 | ✅ **原生编辑** | 自研 `DocxInlineEditor` + GenOffice docx-engine，**字节保真**写回 `.docx`，含图片 / 表格 / 分页符；**Word Ribbon 工具栏**（开始 / 插入选项卡、字体 / 段落 / 样式 / 上标下标 / 字体色 / 高亮） |
+| Excel（xlsx / csv） | ✅ 富渲染 | ✅ **原生编辑** | Univer 表格，值 / 公式 / 样式 / 列宽往返 |
+| PPT（pptx） | ✅ | ✅ **原生编辑** | GenOffice pptx-engine，文字编辑 + 图片替换 + 失焦自动保存 |
 | PDF | ✅ | — | 只读预览 |
 | 图片（png / jpg / svg…） | ✅ | — | 滚轮缩放、拖拽平移、双击复位 |
-| HTML | ✅ | — | WebView 原生渲染，脚本与相对资源照常加载 |
+| HTML | ✅ | ✅ 文本 | WebView 原生渲染（脚本与相对资源照常加载）+ 文本编辑 |
 | 音视频 / 压缩包 | ✅ | — | 内嵌播放 / 解包浏览 |
+
+> Office 预览 / 编辑统一走自建渲染内核，已规避第三方预览组件硬编码双 Vue 实例导致的运行时崩溃（实例 `update` 失败 / `vnode.shapeFlag` / `emitsOptions` 级联崩溃）。
 
 ### 文件管理
 - 多资料库目录管理，自动扫描索引，隐藏文件过滤
@@ -49,9 +51,15 @@
 - 右键菜单：Finder 中显示 / 复制路径 / 删除（二次确认）
 - **左右联动**：右侧增删改 / 新建 / 另存为 / 粘贴截图后，左侧资料库树自动重扫并保留展开态；标题栏刷新按钮可整体重扫（树 + 列表 + 索引），覆盖在应用外改动文件的场景
 
+### 相似图片（本地智能归组）
+- Rust 端 `images.rs` 递归扫描图片，计算 **dHash** 9×8 灰度指纹（缓存按指纹复用，每 20 张落盘）
+- 前端「相似图片」工具页：索引计数 + 阈值滑杆（0–20，默认 10）+ 分组卡片（缩略图 / 尺寸 / 体积 / 路径，点击打开、单张删除）+ 可释放空间估算；删除后自动刷新分组
+
 ### AI 助手（可选）
 - 对接任意 **OpenAI 兼容接口**（base_url + api_key + model）
 - 右下角悬浮窗，**流式输出**：文件摘要 · 自动打标 · 内容解读
+- **批量 AI 摘要**：文件浏览器工具栏「✨ AI 摘要 / ↻ 重算」一键生成，摘要首行展示（悬浮看全文），缓存按 `size:mtime` 指纹判失效
+- **语义检索**：文件树过滤与搜索命中**包含摘要语义**（正文没有的关键词也能命中）
 
 ### 体验
 - 深色 / 浅色主题一键切换
@@ -113,24 +121,51 @@ npm run app:build
 
 | 层 | 技术 |
 |---|---|
-| 桌面框架 | Tauri 2（Rust 后端，commands 文件扫描 / 读写 / Office 转换） |
+| 桌面框架 | Tauri 2（Rust 后端：commands 文件扫描 / 索引 / Office 读写 / 图片指纹） |
 | 前端 | Vue 3 + Vite 6 + TypeScript |
 | Markdown | marked + DOMPurify + mermaid + markmap |
-| Word 编辑 | canvas-editor + plugin-docx（OOXML 导入导出） |
+| Word 编辑 | 自研 `DocxInlineEditor` + GenOffice docx-engine（OOXML 块树 + 脏块重写，字节保真） |
+| PPT 编辑 | GenOffice pptx-engine（纯 TS，字节保留） |
 | 表格编辑 | Univer Sheets + exceljs 桥接 |
-| Office 解析 | mammoth（docx→HTML）、SheetJS（xlsx） |
+| 图片归组 | `image` crate + dHash 指纹（Rust 端索引） |
+| Office 解析 | mammoth（docx→HTML 兜底）、SheetJS（xlsx）、vue-files-preview（PDF / 音视频） |
+
+> Univer 同时内置文档 / 幻灯片编辑器组件（实验性，未接入主预览流）；当前文档走自研 `DocxInlineEditor`，演示走 GenOffice pptx-engine。
 
 ## 目录结构
 
 ```
 MdView
-├── src/                  # Vue 前端
-│   ├── components/       # 页签、编辑器、AI 抽屉等组件
-│   ├── utils/            # Markdown 解析 / viewer 分流
-│   └── styles/           # 主题变量与全局样式
-├── src-tauri/            # Rust 后端（扫描 / 索引 / Office 读写）
-└── assets/readme/        # README 视觉素材
+├── src/                      # Vue 前端
+│   ├── components/           # 页签 / 编辑器 / 工具栏 / AI 抽屉 / 相似图片等组件
+│   │   ├── DocxInlineEditor.vue   # docx 自研渲染 + 编辑（GenOffice 引擎）
+│   │   ├── DocToolbar.vue         # Word Ribbon 工具栏
+│   │   ├── PptxInlineEditor.vue   # pptx 原生编辑（GenOffice 引擎）
+│   │   ├── OfficeSheetEditor.vue  # xlsx 表格编辑（Univer）
+│   │   ├── MdPreview.vue / MindmapView.vue
+│   │   ├── PreviewPane.vue         # 多格式预览 / 编辑路由
+│   │   ├── SimilarImages.vue       # 相似图片工具页
+│   │   ├── AiDrawer.vue            # AI 悬浮窗
+│   │   └── FileTree.vue / FileBrowser.vue / Sidebar.vue
+│   ├── docx/  pptx/         # Office 解析 / 渲染 / 保存引擎封装
+│   ├── vendor/genoffice/     # GenOffice docx/pptx 引擎（vendored）
+│   ├── utils/  styles/  composables/
+├── src-tauri/               # Rust 后端
+│   ├── commands.rs          # Tauri commands 入口
+│   ├── office.rs            # Office 读写为 Markdown 枢纽 + 转换
+│   ├── images.rs            # 相似图片 dHash 索引
+│   ├── summary.rs           # 批量 AI 摘要 + 缓存
+│   └── config.rs / lib.rs / main.rs
+├── scripts/                 # docx/pptx 字节保真验证 harness
+└── assets/readme/           # README 视觉素材
 ```
+
+## 已知边界
+
+- **OCR / 扫描转换**：规划中，尚未实现（计划：本地离线 OCR → 图片转 docx → PDF 转 Word）。
+- **旧版二进制格式**（`.doc` / `.xls` / `.ppt`）：上游引擎不支持，UI 提示「另存为新格式」后编辑。
+- **PDF 编辑**：当前仅只读预览，编辑为远期规划。
+- 所有涉及 AI 凭证的操作需由用户在设置中自行配置与核对，密钥不存于应用外。
 
 ## License
 
