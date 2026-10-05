@@ -136,7 +136,15 @@ function kindFromPath(p: string): string {
 }
 
 /** 打开一组外部传入路径（系统文件关联 / Finder 拖入） */
-async function openExternalPaths(paths: string[]) {
+// 冷启动缓冲 + open-file 事件可能双投递同一批路径；串行排队让第二次
+// openTab 命中"已存在页签"分支，避免并发竞态产生重复页签
+let openExternalQueue: Promise<void> = Promise.resolve()
+function openExternalPaths(paths: string[]) {
+  openExternalQueue = openExternalQueue.then(() => doOpenExternalPaths(paths))
+  return openExternalQueue
+}
+
+async function doOpenExternalPaths(paths: string[]) {
   for (const p of paths) {
     if (!p) continue
     const name = p.split('/').pop() || p
@@ -595,9 +603,18 @@ function tabBindings() {
  */
 const MAX_PREVIEW_CHARS = 5_000_000
 
+// 文件关联/双击打开文档时若停留在首页/帮助/相似图，需切到工作区视图，
+// 否则模板走 HomePage 分支、PreviewPane 在 v-else 中不渲染（表现为"只显示首页"）
+function ensureWorkspaceView() {
+  if (state.page === 'home' || state.page === 'help' || state.page === 'similar') {
+    state.page = 'files'
+  }
+}
+
 async function openTab(entry: FileEntry) {
   const existing = state.tabs.find((t) => t.entry.path === entry.path)
   if (existing) {
+    ensureWorkspaceView()
     state.activeTabPath = entry.path
     state.selected = existing.entry
     return
@@ -611,6 +628,7 @@ async function openTab(entry: FileEntry) {
 
   // 非文本类：图片/PDF/音视频/office → viewer 预览
   if (viewerTypeFor(entry)) {
+    ensureWorkspaceView()
     state.tabs.push({ entry, content: '', dirty: false })
     // 注意：必须取 reactive 代理再赋值，raw 对象上直接写不会触发视图更新（曾导致永久 spinner）
     const rtab = state.tabs[state.tabs.length - 1]
@@ -652,6 +670,7 @@ async function openTab(entry: FileEntry) {
       return
     }
     state.tabs.push({ entry, content: text, dirty: false })
+    ensureWorkspaceView()
     state.activeTabPath = entry.path
     state.selected = entry
   } catch (e) {

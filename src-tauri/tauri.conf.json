@@ -33,7 +33,8 @@
     "active": true,
     "targets": ["dmg", "app", "msi"],
     "macOS": {
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "infoPlist": "Info.plist"
     },
     "fileAssociations": [
       { "ext": ["md", "markdown", "mdx"], "name": "Markdown 文档", "role": "Editor", "mimeType": "text/markdown" },

@@ -67,18 +67,25 @@ pub fn run() {
         .expect("error while building MdView")
         .run(|app_handle, event| {
             if let tauri::RunEvent::Opened { ref urls } = event {
-                let paths: Vec<String> = urls.iter().map(|u| u.path().to_string()).collect();
+                // 注意：url.path() 返回 percent-encoded 字符串（中文/空格 → %XX），
+                // 直接当文件路径会 os error 2；to_file_path() 才做正确解码
+                let paths: Vec<String> = urls
+                    .iter()
+                    .filter_map(|u| u.to_file_path().ok())
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect();
                 if paths.is_empty() {
                     return;
                 }
-                // 主窗口已就绪 → 直接广播给前端 open-file 监听器
+                // 窗口在 build 阶段即已创建，"窗口存在"≠"前端 init 完成"，
+                // 仅 emit 会在冷启动时把事件发进空气。改为：一律先入缓冲，
+                // 前端 init 后经 take_pending_opens 取走（openTab 按路径去重，
+                // 冷热双投递最多激活同一页签，无副作用）；已就绪时再 emit 加速热路径。
+                if let Ok(mut g) = app_handle.state::<PendingOpen>().0.lock() {
+                    g.extend(paths.clone());
+                }
                 if app_handle.get_webview_window("main").is_some() {
                     let _ = app_handle.emit("open-file", paths);
-                } else {
-                    // 冷启动：窗口尚未创建，缓存待前端 init 后取走（避免事件丢失）
-                    if let Ok(mut g) = app_handle.state::<PendingOpen>().0.lock() {
-                        g.extend(paths);
-                    }
                 }
             }
             let _ = (&app_handle, &event);
