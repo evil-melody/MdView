@@ -53,14 +53,6 @@ section h3 {
   line-height: 1.5;
 }
 
-.lib-hint {
-  background: var(--accent-soft);
-  border: 1px solid var(--accent);
-  border-radius: 9px;
-  padding: 10px 14px;
-  color: var(--text-2);
-}
-
 .switch-row {
   display: flex;
   align-items: center;
@@ -68,6 +60,61 @@ section h3 {
   padding: 8px 0;
   font-size: 13px;
   font-weight: 500;
+}
+
+.profiles-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 14px;
+  margin-bottom: 8px;
+}
+
+.profiles-head h3 {
+  font-size: 14px;
+  margin: 0;
+}
+
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.profile-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px 14px;
+  margin-bottom: 12px;
+  background: var(--input-bg);
+}
+
+.profile-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.profile-name {
+  flex: 1;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  background: transparent;
+}
+
+.profile-name:hover,
+.profile-name:focus {
+  border-color: var(--border);
+  background: var(--panel);
+  outline: none;
+}
+
+.profile-name:focus {
+  border-color: var(--accent);
 }
 
 .field {

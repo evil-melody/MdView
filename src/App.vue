@@ -4,6 +4,7 @@ import { open, save } from '@tauri-apps/plugin-dialog'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { state, bumpTree, type OpenTab } from './store'
+import { resolveProfile } from './ai'
 import { loadConfig, saveConfig, scanDirectory, indexRoot, deletePath, renamePath, searchFiles, readText, writeText, readOfficeMd, writeOfficeMd, writeBinaryBase64, aiChatStream, summarizeFiles, loadSummaries, clearSummaries, removeImageRecords } from './api'
 import type { FileEntry, AppConfig, NewFileType } from './types'
 import type { PageKey } from './store'
@@ -783,7 +784,7 @@ const AI_TASKS: Record<string, { title: string; system: string }> = {
 }
 
 const aiEnabled = computed(() => state.config.ai.enabled)
-const aiModelLabel = computed(() => state.config.ai.model || '未配置模型')
+const aiModelLabel = computed(() => resolveProfile(state.config.ai, 'chat')?.model || '未配置模型')
 /** AI 任务可执行：AI 已启用 + 当前有打开的内容 */
 const aiCanRun = computed(() => {
   if (!aiEnabled.value) return false
@@ -873,13 +874,9 @@ async function runAiTask(taskKey: string) {
     { role: 'user', content: prompt }
   ]
   try {
-    await aiChatStream(
-      reqId,
-      messages,
-      state.config.ai.base_url,
-      state.config.ai.api_key,
-      state.config.ai.model
-    )
+    const chat = resolveProfile(state.config.ai, 'chat')
+    if (!chat) throw new Error('未添加模型配置，请先在设置中添加')
+    await aiChatStream(reqId, messages, chat.base_url, chat.api_key, chat.model)
   } catch (e: any) {
     // invoke 阶段的失败（请求未发出 / 非 2xx）：事件已经附带过 ai-error，这里仅兜底
     if (aiReqId.value === reqId) {

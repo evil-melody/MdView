@@ -8,11 +8,26 @@ export interface FileEntry {
   kind: string
 }
 
-export interface AiConfig {
-  enabled: boolean
+/** 一个模型配置：独立的 Base URL / Key / 模型名（兼容 OpenAI 的远程接口） */
+export interface ModelProfile {
+  id: string
+  /** 展示名，如「对话主力」「VL 视觉」 */
+  name: string
   base_url: string
   api_key: string
   model: string
+}
+
+export interface AiConfig {
+  enabled: boolean
+  /** 模型配置列表，可添加多个并在下方按能力切换 */
+  profiles: ModelProfile[]
+  /** 对话 / 摘要 / 打标使用的 profile id */
+  chat_profile: string
+  /** Embedding（向量化 / LanceDB 检索）使用的 profile id */
+  embedding_profile: string
+  /** 视觉(VL)（图片 / 图文文档摘要）使用的 profile id */
+  vlm_profile: string
 }
 
 export interface AppConfig {

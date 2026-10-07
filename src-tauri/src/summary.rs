@@ -105,7 +105,13 @@ pub async fn summarize_files(
     paths: Vec<String>,
 ) -> Result<Vec<SummaryResult>, String> {
     let cfg = crate::config::load_config();
-    if !cfg.ai.enabled || cfg.ai.api_key.trim().is_empty() {
+    let chat = match cfg.ai.resolve_profile(&cfg.ai.chat_profile) {
+        Some(p) => p.clone(),
+        None => {
+            return Err("请先在设置中添加模型配置".to_string());
+        }
+    };
+    if !cfg.ai.enabled || chat.api_key.trim().is_empty() {
         return Err("请先在设置中启用 AI 并配置 API Key".to_string());
     }
 
@@ -144,15 +150,15 @@ pub async fn summarize_files(
         }
     }
 
-    let base = if cfg.ai.base_url.trim().ends_with('/') {
-        cfg.ai.base_url.trim().to_string()
+    let base = if chat.base_url.trim().ends_with('/') {
+        chat.base_url.trim().to_string()
     } else {
-        format!("{}/", cfg.ai.base_url.trim())
+        format!("{}/", chat.base_url.trim())
     };
     let url = format!("{}chat/completions", base);
     let client = reqwest::Client::new();
-    let api_key = cfg.ai.api_key.clone();
-    let model = cfg.ai.model.clone();
+    let api_key = chat.api_key.clone();
+    let model = chat.model.clone();
 
     let tasks = pending.into_iter().map(|(path, text)| {
         let client = client.clone();

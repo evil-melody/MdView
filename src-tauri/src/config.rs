@@ -4,17 +4,87 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelProfile {
+    pub id: String,
+    /// 展示名，如「对话主力」「VL 视觉」
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub model: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiConfig {
     pub enabled: bool,
+    /// 模型配置列表（每个含独立 Base URL / Key / 模型名）
+    #[serde(default)]
+    pub profiles: Vec<ModelProfile>,
+    /// 对话 / 摘要使用的 profile id
+    #[serde(default)]
+    pub chat_profile: String,
+    /// Embedding（向量化 / 检索）使用的 profile id
+    #[serde(default)]
+    pub embedding_profile: String,
+    /// 视觉(VL) 使用的 profile id
+    #[serde(default)]
+    pub vlm_profile: String,
+    // ---- 旧版单模型字段：仅用于读取旧 config.json 迁移到 profiles，不再作为运行时来源 ----
+    #[serde(default)]
     pub base_url: String,
+    #[serde(default)]
     pub api_key: String,
+    #[serde(default)]
     pub model: String,
+}
+
+impl AiConfig {
+    /// 迁移与自愈：旧单模型字段 → 生成第一个 profile；角色绑定指向已删除项时回退。
+    pub fn normalize(&mut self) {
+        if self.profiles.is_empty() && !self.base_url.trim().is_empty() {
+            let id = format!("p{}", now_secs());
+            self.profiles.push(ModelProfile {
+                id: id.clone(),
+                name: if self.model.trim().is_empty() {
+                    "默认模型".to_string()
+                } else {
+                    self.model.trim().to_string()
+                },
+                base_url: self.base_url.clone(),
+                api_key: self.api_key.clone(),
+                model: self.model.clone(),
+            });
+            self.chat_profile = id;
+        }
+        if !self.profiles.is_empty()
+            && (self.chat_profile.is_empty()
+                || !self.profiles.iter().any(|p| p.id == self.chat_profile))
+        {
+            self.chat_profile = self.profiles[0].id.clone();
+        }
+    }
+
+    /// 解析某角色当前生效的配置：按 id 精确匹配 → 对话配置 → 第一个
+    pub fn resolve_profile(&self, role_id: &str) -> Option<&ModelProfile> {
+        self.profiles
+            .iter()
+            .find(|p| p.id == role_id)
+            .or_else(|| self.profiles.iter().find(|p| p.id == self.chat_profile))
+            .or_else(|| self.profiles.first())
+    }
 }
 
 impl Default for AiConfig {
     fn default() -> Self {
         AiConfig {
             enabled: false,
+            profiles: Vec::new(),
+            chat_profile: String::new(),
+            embedding_profile: String::new(),
+            vlm_profile: String::new(),
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: String::new(),
             model: "gpt-4o-mini".to_string(),
@@ -47,10 +117,12 @@ fn config_path() -> PathBuf {
 
 pub fn load_config() -> AppConfig {
     let path = config_path();
-    match fs::read_to_string(&path) {
+    let mut cfg = match fs::read_to_string(&path) {
         Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
         Err(_) => AppConfig::default(),
-    }
+    };
+    cfg.ai.normalize();
+    cfg
 }
 
 pub fn save_config(cfg: &AppConfig) -> Result<(), String> {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { loadDocxDocument } from '../docx/load'
+import { readFileBytes } from '../api'
 import type { DocxDocument } from '../docx/document'
 import DocToolbar from './DocToolbar.vue'
 import { useOfficeToolbar } from '../composables/useOfficeToolbar'
@@ -49,15 +50,52 @@ const {
   attach,
 } = useOfficeToolbar(() => wrapperEl)
 
+/**
+ * 只读预览：解析搬到 Web Worker，避免大 docx 在主线程长时间独占导致 webview 卡死。
+ * 失败（worker 不支持等）回退主线程解析。
+ */
+async function loadHtmlViaWorker(): Promise<string> {
+  const buf = await readFileBytes(props.path)
+  return new Promise<string>((resolve, reject) => {
+    const worker = new Worker(new URL('../docx/parse.worker.ts', import.meta.url), {
+      type: 'module',
+    })
+    worker.onmessage = (e: MessageEvent<{ ok: boolean; html?: string; error?: string }>) => {
+      worker.terminate()
+      if (e.data.ok && e.data.html != null) resolve(e.data.html)
+      else reject(new Error(e.data.error || 'docx worker 解析失败'))
+    }
+    worker.onerror = (e) => {
+      worker.terminate()
+      reject(new Error(e.message || 'docx worker 异常'))
+    }
+    // 转移 ArrayBuffer 所有权，零拷贝
+    worker.postMessage({ bytes: buf }, [buf])
+  })
+}
+
 async function load() {
   loading.value = true
   editorErr.value = ''
   try {
-    const res = await loadDocxDocument(props.path)
-    doc = res.doc
+    let html: string
+    if (props.readonly) {
+      // 只读预览：worker 解析；失败回退主线程（仍可打开，仅可能卡顿）
+      try {
+        html = await loadHtmlViaWorker()
+      } catch (we) {
+        console.warn('[DocxInlineEditor] worker 解析失败，回退主线程：', we)
+        const res = await loadDocxDocument(props.path)
+        html = res.html
+      }
+    } else {
+      const res = await loadDocxDocument(props.path)
+      doc = res.doc
+      html = res.html
+    }
     const canvas = canvasRef.value
     if (!canvas) return
-    canvas.innerHTML = res.html
+    canvas.innerHTML = html
     // 仅文本块可编辑；表格 / 独立图片块保持只读（contentEditable 会破坏其结构）
     canvas.contentEditable = 'false'
     if (!props.readonly) {

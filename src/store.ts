@@ -65,7 +65,7 @@ export const state = reactive<AppState>({
   activeTabPath: null,
   config: {
     scan_roots: [],
-    ai: { enabled: false, base_url: 'https://api.openai.com/v1', api_key: '', model: 'gpt-4o-mini' }
+    ai: { enabled: false, profiles: [], chat_profile: '', embedding_profile: '', vlm_profile: '' }
   },
   viewTab: 'preview',
   searchQuery: '',

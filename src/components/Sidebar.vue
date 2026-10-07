@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { state, kindCounts, type PageKey } from '../store'
+import { resolveProfile } from '../ai'
+import { version as appVersion } from '../../package.json'
 import { KIND_LABEL } from '../types'
 import type { FileEntry } from '../types'
 import logoUrl from '../assets/logo.png'
@@ -51,7 +53,9 @@ const categories = computed(() =>
 const totalCount = computed(() => state.indexEntries.length)
 
 const aiLabel = computed(() =>
-  state.config.ai.enabled ? `AI 已启用 · ${state.config.ai.model}` : 'AI 未启用（去设置）'
+  state.config.ai.enabled
+    ? `AI 已启用 · ${resolveProfile(state.config.ai, 'chat')?.model || '未配置模型'}`
+    : 'AI 未启用（去设置）'
 )
 
 function focusSearch(e: MouseEvent) {
@@ -66,7 +70,7 @@ function focusSearch(e: MouseEvent) {
     <div class="brand">
       <img class="logo-img" :src="logoUrl" alt="MdView" @click="emit('navigate', 'home')" />
       <div class="brand-text" @click="emit('navigate', 'home')">
-        <div class="brand-name">MdView</div>
+        <div class="brand-name">MdView <span class="brand-ver">v{{ appVersion }}</span></div>
         <div class="brand-sub">本地文件与 Markdown 工作台</div>
       </div>
       <button class="brand-collapse" title="收起侧栏（点击左边缘悬浮按钮展开）" @click="emit('collapse')">«</button>
