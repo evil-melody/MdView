@@ -34,5 +34,7 @@
     }
   },
   "include": ["src"],
+  /** 开发期自测目录（vitest 规格，未安装依赖）不进生产构建类型检查 */
+  "exclude": ["src/__devtest__"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

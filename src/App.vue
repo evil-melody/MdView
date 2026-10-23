@@ -15,13 +15,17 @@ import PreviewPane from './components/PreviewPane.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import LibraryDialog from './components/LibraryDialog.vue'
 import NewFileDialog from './components/NewFileDialog.vue'
+import ImportArticleDialog from './components/ImportArticleDialog.vue'
 import HomePage from './components/HomePage.vue'
 import HelpPage from './components/HelpPage.vue'
 import SimilarImages from './components/SimilarImages.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import AiDrawer from './components/AiDrawer.vue'
+import ConvertMenu from './components/ConvertMenu.vue'
 import { parseMarkdown, type MarkdownHeading } from './utils/markdown'
 import { buildViewer, viewerTypeFor, officeEditable } from './utils/viewer'
+import { convertFileFormat } from './utils/convert'
+import { exportMarkdownPdf } from './utils/exportPdf'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
 
@@ -43,6 +47,9 @@ const showNewFile = ref(false)
 const newFileDir = ref('')
 /** 刚创建的文件路径：PreviewPane 命中后直接进「编辑」页签 */
 const justCreatedPath = ref<string | null>(null)
+/** 链接导入弹窗：默认落当前打开目录，可在弹窗内改到别处 */
+const showImport = ref(false)
+const importDir = ref('')
 const toast = ref('')
 // AI 浮窗状态（全局：FAB + 流式输出）
 const aiOpen = ref(false)
@@ -285,6 +292,34 @@ async function onLibSaved(c: AppConfig) {
   }
 }
 
+/** 主面板「移除资料库」：仅从配置注销（不删文件夹），与资料库管理弹窗语义一致 */
+async function onRemoveRoot(root: string) {
+  state.config.scan_roots = state.config.scan_roots.filter((r) => r !== root)
+  await saveConfig(state.config)
+  if (state.config.scan_roots.length) {
+    const currentAlive = state.config.scan_roots.some((r) => state.currentDir.startsWith(r))
+    if (!currentAlive) await openDir(state.config.scan_roots[0])
+    await rebuildIndex(false)
+    showToast('已移除资料库: ' + root.split('/').filter(Boolean).pop())
+  } else {
+    state.entries = []
+    state.indexEntries = []
+    state.currentDir = ''
+    showToast('资料库已清空')
+  }
+}
+
+/** 移除前的二次确认（与删除走同一 ConfirmDialog 模式，避免误点） */
+const pendingRemoveRoot = ref<string | null>(null)
+function requestRemoveRoot(root: string) {
+  pendingRemoveRoot.value = root
+}
+async function confirmRemoveRoot() {
+  const root = pendingRemoveRoot.value
+  pendingRemoveRoot.value = null
+  if (root) await onRemoveRoot(root)
+}
+
 async function onLibOpenRoot(root: string) {
   showLibDialog.value = false
   await openRoot(root)
@@ -484,6 +519,45 @@ async function createNewFile(p: { type: NewFileType; name: string; dir: string }
   showToast('已创建: ' + fileName)
 }
 
+/** 链接导入入口：默认目标目录 = 当前打开目录，无则回落首个资料库 */
+function openImportArticle() {
+  const dir = state.currentDir || state.config.scan_roots[0] || ''
+  if (!dir) {
+    showToast('请先添加资料库目录')
+    return
+  }
+  importDir.value = dir
+  showImport.value = true
+}
+
+/**
+ * 导入完成（弹窗内已 invoke 成功）：切文件页 → 刷新树/列表/索引 →
+ * 产物打开为新页签。html 文件 kindFromPath 落 'code'，viewerTypeFor 为 null，
+ * 走文本编辑器，符合预期。
+ */
+async function handleImport(res: { path: string; title: string; dir?: string }) {
+  showImport.value = false
+  state.page = 'files'
+  state.searchResults = []
+  bumpTree()
+  const dir = res.dir || res.path.slice(0, res.path.lastIndexOf('/'))
+  if (dir) await openDir(dir)
+  await rebuildIndex(false)
+  const name = res.path.split('/').pop() || res.path
+  const ext = (name.split('.').pop() || '').toLowerCase()
+  const entry: FileEntry = {
+    name,
+    path: res.path,
+    is_dir: false,
+    ext,
+    size: 0,
+    modified: '',
+    kind: kindFromPath(res.path)
+  }
+  await openTab(entry)
+  showToast('已导入: ' + res.title)
+}
+
 /** 另存为：原生保存弹窗选位置，落盘后页签改指向新文件 */
 async function saveAsCurrent() {
   const t = state.tabs.find((x) => x.entry.path === state.activeTabPath)
@@ -516,6 +590,94 @@ async function saveAsCurrent() {
   if (dir && dir === state.currentDir) await openDir(dir)
   await rebuildIndex(false)
   showToast('已另存为: ' + name)
+}
+
+// ---- 转格式（「另存为」的跨格式形态；pdf 走前端所见即所得导出） ----
+const convertMenu = ref<{ entry: FileEntry; x: number; y: number } | null>(null)
+const converting = ref(false)
+
+/** 打开目标格式浮层：优先用触发元素位置（预览页头按钮），缺省用落地坐标（右键菜单） */
+function openConvertMenu(entry: FileEntry, ev?: MouseEvent) {
+  const rect = (ev?.currentTarget as HTMLElement | null)?.getBoundingClientRect()
+  if (rect) {
+    convertMenu.value = { entry, x: rect.left - 88, y: rect.bottom + 6 }
+  } else {
+    convertMenu.value = { entry, x: ev?.clientX ?? 24, y: ev?.clientY ?? 80 }
+  }
+}
+
+/** 右键菜单入口：沿用菜单自身坐标（略微内缩，避免与菜单重叠） */
+function openConvertMenuAt(entry: FileEntry, x: number, y: number) {
+  convertMenu.value = { entry, x: x + 8, y: y + 6 }
+}
+
+/** 预览页头按钮入口（模板不支持非空断言，收口到一个函数里） */
+function onConvertFromPane(ev: MouseEvent) {
+  if (state.selected) openConvertMenu(state.selected, ev)
+}
+
+async function pickConvertTarget(target: string) {
+  const job = convertMenu.value
+  convertMenu.value = null
+  if (!job || converting.value) return
+  const { entry } = job
+  converting.value = true
+  try {
+    const outPath =
+      target === 'pdf'
+        ? await exportPdfFor(entry)
+        : (await convertFileFormat(entry.path, target)).output_path
+    if (!outPath) return
+    showToast(`已转换: ${outPath.split('/').pop()}`)
+    bumpTree()
+    if (state.currentDir) await openDir(state.currentDir)
+    await rebuildIndex(false)
+    await openConverted(outPath)
+  } catch (e) {
+    showToast('转换失败: ' + String(e))
+  } finally {
+    converting.value = false
+  }
+}
+
+/** pdf 目标：后端不生成 PDF（无渲染引擎），改由前端按预览样式栅格化导出 */
+async function exportPdfFor(entry: FileEntry): Promise<string | null> {
+  const md = await mdSourceFor(entry)
+  if (md == null) throw new Error('PDF 导出仅支持 Markdown 文档')
+  const dir = entry.path.slice(0, entry.path.lastIndexOf('/'))
+  const stem = entry.name.replace(/\.[^./]*$/, '')
+  return exportMarkdownPdf({ md, baseDir: dir, defaultName: `${stem}.pdf` })
+}
+
+/** 取 Markdown 源：优先用页签内当前内容（含未保存改动），否则读盘 */
+async function mdSourceFor(entry: FileEntry): Promise<string | null> {
+  const ext = (entry.ext || '').toLowerCase()
+  if (ext !== 'md' && ext !== 'markdown') return null
+  const t = state.tabs.find((x) => x.entry.path === entry.path)
+  if (t) return t.content
+  return readText(entry.path)
+}
+
+/** 转换产物落盘后直接打开为新页签（文本走编辑器，二进制走对应预览） */
+async function openConverted(path: string) {
+  // 优先复用重扫后的索引条目（带真实 size / modified），避免手工造半成品 entry
+  const known =
+    state.indexEntries.find((x) => x.path === path) ||
+    state.entries.find((x) => x.path === path)
+  if (known) {
+    await openTab(known)
+    return
+  }
+  const name = path.split('/').pop() || path
+  await openTab({
+    name,
+    path,
+    is_dir: false,
+    ext: (name.split('.').pop() || '').toLowerCase(),
+    size: 0,
+    modified: '',
+    kind: kindFromPath(path)
+  })
 }
 
 /** 手动刷新：左侧树 + 右侧列表 + 索引一起重扫（覆盖在应用外改动文件的场景） */
@@ -970,6 +1132,15 @@ const ctxItems = computed<CtxItem[]>(() => {
       }
     }
   ]
+  if (!e.is_dir) {
+    items.push({
+      label: '转格式…',
+      action: () => {
+        const m = ctxMenu.value
+        if (m) openConvertMenuAt(e, m.x, m.y)
+      }
+    })
+  }
   items.push({ label: '删除', danger: true, action: () => requestDelete(e) })
   return items
 })
@@ -1020,7 +1191,9 @@ onMounted(init)
       @open-entry="onSelect"
       @toggle-theme="toggleTheme"
       @manage-roots="showLibDialog = true"
+      @remove-root="requestRemoveRoot"
       @new-file="openNewFile"
+      @import-article="openImportArticle"
       @refresh="refreshAll"
       @entry-context="openCtxMenu"
     />
@@ -1050,6 +1223,7 @@ onMounted(init)
         @open-settings="showSettings = true"
         @open-root="openRoot"
         @add-root="addRoot"
+        @import-article="openImportArticle"
       />
       <HelpPage v-else-if="state.page === 'help'" @open-settings="showSettings = true" />
 
@@ -1080,6 +1254,7 @@ onMounted(init)
             @close-tab="requestCloseTab"
             @save="saveCurrent"
             @save-as="saveAsCurrent"
+            @convert="onConvertFromPane"
             @image-saved="onImageSaved"
             @update:content="content = $event"
             @close="closeDoc"
@@ -1102,6 +1277,7 @@ onMounted(init)
           @up="openDir(currentParent)"
           @open-dir="openDir"
           @new-file="openNewFile"
+          @import-article="openImportArticle"
           @search="doSearch"
           @entry-context="openCtxMenu"
           @summarize="(force) => summarizeVisible(force)"
@@ -1133,6 +1309,13 @@ onMounted(init)
       @create="createNewFile"
     />
 
+    <ImportArticleDialog
+      v-if="showImport"
+      :default-dir="importDir"
+      @close="showImport = false"
+      @imported="handleImport"
+    />
+
     <ConfirmDialog
       v-if="pendingDelete"
       title="确认删除"
@@ -1142,6 +1325,16 @@ onMounted(init)
       confirm-text="删除"
       @confirm="confirmDelete"
       @cancel="pendingDelete = null"
+    />
+
+    <ConfirmDialog
+      v-if="pendingRemoveRoot"
+      title="移除资料库"
+      :message="`确定将「${pendingRemoveRoot.split('/').filter(Boolean).pop()}」从资料库移除吗？仅注销该目录（不删除文件夹），文件仍保留在磁盘，可随时重新添加。`"
+      :danger="false"
+      confirm-text="移除"
+      @confirm="confirmRemoveRoot"
+      @cancel="pendingRemoveRoot = null"
     />
 
     <ConfirmDialog
@@ -1176,6 +1369,17 @@ onMounted(init)
     </div>
 
     <div v-if="toast" class="toast">{{ toast }}</div>
+
+    <!-- 转格式：目标格式浮层（预览页头按钮 / 右键菜单共用同一实例） -->
+    <ConvertMenu
+      v-if="convertMenu"
+      :key="convertMenu.entry.path"
+      :entry="convertMenu.entry"
+      :x="convertMenu.x"
+      :y="convertMenu.y"
+      @pick="pickConvertTarget"
+      @close="convertMenu = null"
+    />
 
     <!-- AI 助手：右下角 FAB + 流式浮窗（全局可用，不依赖具体页签） -->
     <AiDrawer

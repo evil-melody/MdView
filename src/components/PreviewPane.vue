@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, defineAsyncComponent, h } from 'vue'
+import { ref, computed, watch, nextTick, defineAsyncComponent, h, onMounted, onBeforeUnmount } from 'vue'
 import type { FileEntry, ViewTab } from '../types'
 import type { OpenTab } from '../store'
 import type { MarkdownHeading } from '../utils/markdown'
@@ -33,6 +33,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'save'): void
   (e: 'save-as'): void
+  (e: 'convert', ev: MouseEvent): void
   (e: 'update:content', v: string): void
   (e: 'close'): void
   (e: 'switch-tab', path: string): void
@@ -196,6 +197,196 @@ async function commitPptx(): Promise<boolean> {
   return true
 }
 
+// ---- 查找 / 替换（当前可见编辑器，editorEl 在 v-if 下只指向挂载的那个） ----
+const editorEl = ref<HTMLTextAreaElement | null>(null)
+const findInputEl = ref<HTMLInputElement | null>(null)
+const mdPreviewRef = ref<InstanceType<typeof MdPreview> | null>(null)
+
+const findOpen = ref(false)
+const findQuery = ref('')
+const findReplace = ref('')
+const findCase = ref(false)
+const findMatches = ref<{ start: number; end: number }[]>([])
+const findIndex = ref(-1)
+
+/** 转义正则元字符，避免查询词里的 . * ( ) 等被当成正则语法 */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** 按 findQuery / findCase 重新计算全部命中；空查询则清空；可传 text 直接基于新内容计算 */
+function recomputeMatches(text?: string) {
+  const src = text ?? props.content
+  const q = findQuery.value
+  findMatches.value = []
+  findIndex.value = -1
+  if (!q) return
+  const re = new RegExp(escapeRegExp(q), findCase.value ? 'g' : 'gi')
+  let m: RegExpExecArray | null
+  // 全局匹配逐个推进 lastIndex；零长匹配时手动 +1，避免死循环
+  while ((m = re.exec(src)) !== null) {
+    if (m[0].length === 0) {
+      re.lastIndex++
+      continue
+    }
+    findMatches.value.push({ start: m.index, end: m.index + m[0].length })
+  }
+  if (findMatches.value.length) findIndex.value = 0
+}
+
+/** 选中当前命中并聚焦，使其进入视野（仅在 next/prev/替换 时调用，避免抢走查找框焦点） */
+function selectCurrentMatch() {
+  const el = editorEl.value
+  const matches = findMatches.value
+  if (!el || matches.length === 0 || findIndex.value < 0) return
+  const m = matches[findIndex.value]
+  el.focus()
+  el.setSelectionRange(m.start, m.end)
+}
+
+function findNext() {
+  if (findMatches.value.length === 0) return
+  findIndex.value = (findIndex.value + 1) % findMatches.value.length
+  selectCurrentMatch()
+}
+
+function findPrev() {
+  if (findMatches.value.length === 0) return
+  findIndex.value =
+    (findIndex.value - 1 + findMatches.value.length) % findMatches.value.length
+  selectCurrentMatch()
+}
+
+/** 替换当前命中：通过 emit 回写 prop（不能直接改），再基于新内容重算 */
+function replaceCurrent() {
+  const matches = findMatches.value
+  if (!findQuery.value || findIndex.value < 0 || findIndex.value >= matches.length) return
+  const m = matches[findIndex.value]
+  const newVal =
+    props.content.slice(0, m.start) + findReplace.value + props.content.slice(m.end)
+  emit('update:content', newVal)
+  recomputeMatches(newVal)
+  if (findIndex.value >= findMatches.value.length) {
+    findIndex.value = findMatches.value.length ? findMatches.value.length - 1 : -1
+  }
+  selectCurrentMatch()
+}
+
+/** 替换全部：String.replace 全替换后回写 */
+function replaceAll() {
+  if (!findQuery.value) return
+  const re = new RegExp(escapeRegExp(findQuery.value), findCase.value ? 'g' : 'gi')
+  const newVal = props.content.replace(re, findReplace.value)
+  emit('update:content', newVal)
+  recomputeMatches(newVal)
+}
+
+function onFindInput(e: Event) {
+  findQuery.value = (e.target as HTMLInputElement).value
+  recomputeMatches()
+}
+
+async function openFind() {
+  findOpen.value = true
+  await nextTick()
+  findInputEl.value?.focus()
+  findInputEl.value?.select()
+}
+
+function closeFind() {
+  findOpen.value = false
+  findMatches.value = []
+  findIndex.value = -1
+  editorEl.value?.focus()
+}
+
+// ---- 编辑 ↔ 预览 滚动同步（仅 Markdown 分屏） ----
+const syncLock = ref(false)
+
+function syncScroll(source: HTMLElement, target: HTMLElement) {
+  const sMax = source.scrollHeight - source.clientHeight
+  const tMax = target.scrollHeight - target.clientHeight
+  if (sMax <= 0 || tMax <= 0) return // 分母为 0 时跳过
+  const ratio = source.scrollTop / sMax
+  syncLock.value = true
+  target.scrollTop = ratio * tMax
+  // 用双 rAF 兜底解除 lock，确保程序化滚动触发的 scroll 事件被忽略（防双向回灌死循环）
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      syncLock.value = false
+    })
+  })
+}
+
+function onEditorScroll() {
+  if (syncLock.value) return
+  const src = editorEl.value
+  const tgt = mdPreviewRef.value?.getScrollEl?.()
+  if (!src || !tgt) return
+  syncScroll(src, tgt)
+}
+
+function onPreviewScroll() {
+  if (syncLock.value) return
+  const src = mdPreviewRef.value?.getScrollEl?.()
+  const tgt = editorEl.value
+  if (!src || !tgt) return
+  syncScroll(src, tgt)
+}
+
+let boundPreviewEl: HTMLElement | null = null
+
+function bindPreviewScroll() {
+  const el = (mdPreviewRef.value?.getScrollEl?.() as HTMLElement | null) ?? null
+  if (boundPreviewEl) {
+    boundPreviewEl.removeEventListener('scroll', onPreviewScroll)
+    boundPreviewEl = null
+  }
+  const inSplit =
+    tab.value === 'edit' &&
+    !isCode.value &&
+    !isHtml.value &&
+    !isOffice.value &&
+    !isViewerKind.value
+  if (inSplit && el) {
+    el.addEventListener('scroll', onPreviewScroll)
+    boundPreviewEl = el
+  }
+}
+
+function onWindowKeydown(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+    if (tab.value === 'edit' && editorEl.value) {
+      e.preventDefault()
+      openFind()
+    }
+  } else if (e.key === 'Escape' && findOpen.value) {
+    e.preventDefault()
+    closeFind()
+  }
+}
+
+// 切换 tab / 预览实例时绑定或解绑预览滚动监听，避免泄漏
+watch([tab, mdPreviewRef], bindPreviewScroll, { flush: 'post' })
+// 编辑时内容变化则刷新命中（保持查找栏状态与正文一致）
+watch(
+  () => props.content,
+  () => {
+    if (findOpen.value && findQuery.value) recomputeMatches()
+  }
+)
+
+onMounted(() => {
+  window.addEventListener('keydown', onWindowKeydown)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onWindowKeydown)
+  if (boundPreviewEl) {
+    boundPreviewEl.removeEventListener('scroll', onPreviewScroll)
+    boundPreviewEl = null
+  }
+})
+
 defineExpose({ exportOffice, commitPptx })
 </script>
 
@@ -255,6 +446,12 @@ defineExpose({ exportOffice, commitPptx })
           title="保存到其它位置"
           @click="emit('save-as')"
         >另存为</button>
+        <button
+          v-if="entry && !isViewerKind"
+          class="btn"
+          title="转换为其它格式（md -> pdf / docx / html …）"
+          @click="emit('convert', $event)"
+        >转格式</button>
         <button
           v-if="canEdit"
           class="btn primary"
@@ -316,6 +513,7 @@ defineExpose({ exportOffice, commitPptx })
             <!-- docx 原生解析失败兜底：纯文本编辑（不回退 vue-files-preview，避免双 Vue 崩溃） -->
             <textarea
               v-else-if="isDocx"
+              ref="editorEl"
               class="editor scrollable full"
               :value="content"
               @input="emit('update:content', ($event.target as HTMLTextAreaElement).value)"
@@ -344,6 +542,19 @@ defineExpose({ exportOffice, commitPptx })
               :path="entry!.path"
               @change="emit('dirty')"
             />
+            <div v-if="findOpen" class="find-bar">
+              <input ref="findInputEl" class="find-input" :value="findQuery" placeholder="查找"
+                @input="onFindInput" @keydown.enter.prevent="findNext" @keydown.shift.enter.prevent="findPrev" />
+              <input class="find-input" v-model="findReplace" placeholder="替换为"
+                @keydown.enter.prevent="findNext" @keydown.shift.enter.prevent="findPrev" />
+              <button class="find-btn" title="上一个 (Shift+Enter)" @click="findPrev">↑</button>
+              <button class="find-btn" title="下一个 (Enter)" @click="findNext">↓</button>
+              <button class="find-btn" title="替换当前" @click="replaceCurrent">替换</button>
+              <button class="find-btn" title="替换全部" @click="replaceAll">全部</button>
+              <label class="find-case"><input type="checkbox" v-model="findCase" @change="() => recomputeMatches()" />区分大小写</label>
+              <span class="find-count">{{ findMatches.length ? (findIndex + 1) + ' / ' + findMatches.length : '0 / 0' }}</span>
+              <button class="find-close" title="关闭 (Esc)" @click="closeFind">×</button>
+            </div>
           </div>
           <!-- 代码 / 配置类：CodeMirror 高亮编辑器（语法高亮 + Tab 缩进 + 查找） -->
           <div v-else-if="tab === 'edit' && isCode" class="flex1">
@@ -357,22 +568,51 @@ defineExpose({ exportOffice, commitPptx })
           </div>
           <div v-else-if="tab === 'edit' && isHtml" class="flex1">
             <textarea
+              ref="editorEl"
               class="editor scrollable full"
               :value="content"
               @input="emit('update:content', ($event.target as HTMLTextAreaElement).value)"
               spellcheck="false"
             ></textarea>
+            <div v-if="findOpen" class="find-bar">
+              <input ref="findInputEl" class="find-input" :value="findQuery" placeholder="查找"
+                @input="onFindInput" @keydown.enter.prevent="findNext" @keydown.shift.enter.prevent="findPrev" />
+              <input class="find-input" v-model="findReplace" placeholder="替换为"
+                @keydown.enter.prevent="findNext" @keydown.shift.enter.prevent="findPrev" />
+              <button class="find-btn" title="上一个 (Shift+Enter)" @click="findPrev">↑</button>
+              <button class="find-btn" title="下一个 (Enter)" @click="findNext">↓</button>
+              <button class="find-btn" title="替换当前" @click="replaceCurrent">替换</button>
+              <button class="find-btn" title="替换全部" @click="replaceAll">全部</button>
+              <label class="find-case"><input type="checkbox" v-model="findCase" @change="() => recomputeMatches()" />区分大小写</label>
+              <span class="find-count">{{ findMatches.length ? (findIndex + 1) + ' / ' + findMatches.length : '0 / 0' }}</span>
+              <button class="find-close" title="关闭 (Esc)" @click="closeFind">×</button>
+            </div>
           </div>
           <div v-else-if="tab === 'edit'" class="editor-split">
             <textarea
+              ref="editorEl"
               class="editor scrollable"
               :value="content"
               @input="emit('update:content', ($event.target as HTMLTextAreaElement).value)"
               @paste="onPasteImage"
+              @scroll="onEditorScroll"
               spellcheck="false"
             ></textarea>
             <div class="editor-live flex1">
-              <MdPreview :content="content" :dirty="dirty" :base-path="basePath" />
+              <MdPreview ref="mdPreviewRef" :content="content" :dirty="dirty" :base-path="basePath" />
+            </div>
+            <div v-if="findOpen" class="find-bar">
+              <input ref="findInputEl" class="find-input" :value="findQuery" placeholder="查找"
+                @input="onFindInput" @keydown.enter.prevent="findNext" @keydown.shift.enter.prevent="findPrev" />
+              <input class="find-input" v-model="findReplace" placeholder="替换为"
+                @keydown.enter.prevent="findNext" @keydown.shift.enter.prevent="findPrev" />
+              <button class="find-btn" title="上一个 (Shift+Enter)" @click="findPrev">↑</button>
+              <button class="find-btn" title="下一个 (Enter)" @click="findNext">↓</button>
+              <button class="find-btn" title="替换当前" @click="replaceCurrent">替换</button>
+              <button class="find-btn" title="替换全部" @click="replaceAll">全部</button>
+              <label class="find-case"><input type="checkbox" v-model="findCase" @change="() => recomputeMatches()" />区分大小写</label>
+              <span class="find-count">{{ findMatches.length ? (findIndex + 1) + ' / ' + findMatches.length : '0 / 0' }}</span>
+              <button class="find-close" title="关闭 (Esc)" @click="closeFind">×</button>
             </div>
           </div>
           <div v-else-if="tab === 'mindmap'" class="flex1">

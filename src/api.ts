@@ -156,3 +156,18 @@ export const clearImageIndex = () => invoke<boolean>('clear_image_index')
 /** 移除指定图片的索引记录（文件删除后同步，避免仍出现在相似分组里） */
 export const removeImageRecords = (paths: string[]) =>
   invoke<boolean>('remove_image_records', { paths })
+
+/**
+ * 根据链接导入文章：后端抓取网页 → 提取正文 → 生成本地 md / html，
+ * 正文图片下载到同目录 `.assets` 文件夹。name 留空则自动取网页标题。
+ */
+export const importArticleFromUrl = (
+  url: string,
+  dir: string,
+  format: string,
+  name?: string
+) =>
+  invoke<{ path: string; title: string; images: number }>(
+    'import_article_from_url',
+    { url, dir, format, ...(name ? { name } : {}) }
+  )

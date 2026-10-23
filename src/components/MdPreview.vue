@@ -100,6 +100,9 @@ onBeforeUnmount(() => {
   themeObserver?.disconnect()
   themeObserver = null
 })
+
+/** 暴露预览滚动容器（.md-body），供父组件做编辑↔预览滚动同步 */
+defineExpose({ getScrollEl: () => bodyEl.value })
 </script>
 
 <template>

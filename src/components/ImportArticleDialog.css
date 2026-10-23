@@ -1,0 +1,155 @@
+@import '../styles/dialog.css';
+
+.ia-dialog {
+  width: 560px;
+}
+
+.ia-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+  letter-spacing: 0.08em;
+  padding: 4px 2px 8px;
+}
+
+/* ---- 格式选择（公共按钮组，非原生 radio；二选一） ---- */
+.ia-types {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.ia-type {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 11px 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+
+.ia-type:hover {
+  border-color: var(--border-2);
+  background: var(--panel-3);
+  color: var(--text);
+}
+
+.ia-type.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-2);
+}
+
+.ia-ico {
+  font-size: 19px;
+  line-height: 1;
+}
+
+.ia-name {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.ia-ext {
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+.ia-type.on .ia-ext {
+  color: var(--accent-2);
+}
+
+/* ---- 链接 / 文件名输入 ---- */
+.ia-input {
+  display: flex;
+  align-items: center;
+  height: 38px;
+  padding: 0 12px;
+  margin-bottom: 16px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.ia-input:focus-within {
+  border-color: var(--accent);
+  background: var(--input-bg);
+}
+
+.ia-input.bad {
+  border-color: var(--danger);
+}
+
+.ia-input input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  font-size: 13.5px;
+}
+
+.ia-input input:focus {
+  outline: none;
+}
+
+.ia-input input::placeholder {
+  color: var(--text-3);
+}
+
+.ia-suffix {
+  font-size: 13px;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
+/* ---- 保存位置 ---- */
+.ia-dir {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px 9px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.ia-dir-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.ia-dir .btn {
+  height: 28px;
+  padding: 0 11px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.ia-hint,
+.ia-error {
+  font-size: 12px;
+  padding: 10px 2px 0;
+}
+
+.ia-hint {
+  color: var(--text-3);
+}
+
+.ia-error {
+  color: var(--danger);
+}

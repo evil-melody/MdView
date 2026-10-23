@@ -27,6 +27,7 @@ const emit = defineEmits<{
   (e: 'rename', entry: FileEntry, name: string): void
   (e: 'up'): void
   (e: 'new-file'): void
+  (e: 'import-article'): void
   (e: 'open-dir', path: string): void
   (e: 'search'): void
   (e: 'update:query', v: string): void
@@ -172,6 +173,7 @@ function summaryFull(p: string): string {
       <template v-else-if="mode !== 'flat'">
         <button class="btn ghost icon-btn" title="上级目录" @click="emit('up')">↑</button>
         <button class="btn new-file-btn" title="在当前目录新建文件" @click="emit('new-file')">＋ 新建</button>
+        <button class="btn import-btn" title="从链接导入文章（生成 md / html）" @click="emit('import-article')">🔗 导入</button>
         <button
           class="btn sum-btn"
           :disabled="state.summaryBusy"

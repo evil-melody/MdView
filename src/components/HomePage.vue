@@ -10,6 +10,7 @@ const emit = defineEmits<{
   (e: 'open-settings'): void
   (e: 'open-root', root: string): void
   (e: 'add-root'): void
+  (e: 'import-article'): void
 }>()
 
 const counts = computed(() => kindCounts())
@@ -37,10 +38,15 @@ const quick = [
   { icon: '📁', title: '文件浏览', desc: '浏览与打开已索引目录的全部文件', action: 'files' },
   { icon: '📝', title: 'Markdown 工作台', desc: '预览、编辑与脑图，所见即所得', action: 'category:markdown' },
   { icon: '🔍', label: '', title: '文件检索', desc: '按文件名或内容关键词搜索', action: 'files' },
-  { icon: '🕐', title: '最近更新', desc: '快速定位最近修改过的文件', action: 'recent' }
+  { icon: '🕐', title: '最近更新', desc: '快速定位最近修改过的文件', action: 'recent' },
+  { icon: '🔗', title: '导入文章', desc: '粘贴链接，生成 md / html 文档', action: 'import' }
 ]
 
 function go(action: string) {
+  if (action === 'import') {
+    emit('import-article')
+    return
+  }
   if (action.startsWith('category:')) {
     emit('navigate', 'category', action.split(':')[1])
   } else {

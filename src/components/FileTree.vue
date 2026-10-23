@@ -26,6 +26,7 @@ const emit = defineEmits<{
   (e: 'open-dir', entry: FileEntry): void
   (e: 'add-root'): void
   (e: 'tree-context', entry: FileEntry, ev: MouseEvent): void
+  (e: 'remove-root', root: string): void
 }>()
 const rootNodes = ref<TreeNode[]>([])
 const expandedRoot = ref('')
@@ -92,6 +93,8 @@ provide('ft-open-file', (entry: FileEntry) => emit('open-file', entry))
 provide('ft-toggle', onDirClick)
 provide('ft-active-path', () => props.activePath || '')
 provide('ft-context', (entry: FileEntry, ev: MouseEvent) => emit('tree-context', entry, ev))
+// 主面板「移除资料库」：仅根节点可用，转交上层持久化（只注销配置、不删文件夹）
+provide('ft-remove-root', (root: string) => emit('remove-root', root))
 
 // config 异步加载 / 增删资料库时重建根节点，保留已展开根。
 // 用 join 键值比较而非数组引用：addRoot 走的是 push 原地改数组，引用不变，

@@ -36,6 +36,20 @@
   color: #fff;
 }
 
+/* 导入文章：与「新建」同高的次级按钮，hover 时强调 */
+.import-btn {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 12.5px;
+  flex-shrink: 0;
+}
+
+.import-btn:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-2);
+}
+
 .crumbs {
   flex: 1;
   display: flex;

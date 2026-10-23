@@ -1,8 +1,10 @@
 mod commands;
 mod config;
+pub mod convert;
 mod images;
 pub mod office;
 mod summary;
+mod web_import;
 
 use std::sync::Mutex;
 
@@ -13,6 +15,7 @@ use commands::{
     replace_pptx_image, save_config_cmd, scan_directory, search_files, toggle_devtools,
     update_pptx_text, write_binary_base64, write_file_bytes, write_office_md, write_text,
 };
+use convert::commands::{convert_file_format, supported_convert_targets};
 use images::{
     clear_image_index, find_similar, index_images, load_image_index, remove_image_records,
 };
@@ -61,7 +64,10 @@ pub fn run() {
             load_image_index,
             clear_image_index,
             remove_image_records,
+            convert_file_format,
+            supported_convert_targets,
             take_pending_opens,
+            web_import::import_article_from_url,
         ])
         .build(tauri::generate_context!())
         .expect("error while building MdView")

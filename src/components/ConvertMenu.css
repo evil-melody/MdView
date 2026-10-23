@@ -1,0 +1,62 @@
+/* 「转格式」目标格式浮层（Teleport 到 body，fixed 定位） */
+
+.convert-pop {
+  position: fixed;
+  z-index: 120;
+  width: 188px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  border-radius: 10px;
+  padding: 5px;
+  box-shadow: var(--shadow, 0 12px 40px rgba(0, 0, 0, 0.35));
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.convert-pop-title {
+  font-size: 11px;
+  color: var(--text-3, var(--text));
+  opacity: 0.7;
+  padding: 5px 10px 6px;
+}
+
+.convert-pop-src {
+  margin-left: 4px;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+}
+
+.convert-pop-hint {
+  font-size: 12px;
+  color: var(--text-3, var(--text));
+  opacity: 0.65;
+  padding: 8px 10px 10px;
+}
+
+.convert-pop-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.convert-pop-item:hover {
+  background: var(--panel-3);
+}
+
+.convert-pop-ext {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 11px;
+  color: var(--text-3, var(--text));
+  opacity: 0.6;
+}

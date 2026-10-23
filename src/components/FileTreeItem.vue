@@ -20,6 +20,8 @@ const openFile = inject<(e: FileEntry) => void>('ft-open-file', () => {})
 const toggle = inject<(n: TreeNode) => void>('ft-toggle', () => {})
 const getActivePath = inject<() => string>('ft-active-path', () => '')
 const onContext = inject<((e: FileEntry, ev: MouseEvent) => void) | undefined>('ft-context', undefined)
+// 主面板「移除资料库」：仅根节点（depth===0）提供，点击仅注销配置、不删文件夹
+const onRemoveRoot = inject<((p: string) => void) | undefined>('ft-remove-root', undefined)
 
 const activePath = ref(getActivePath())
 
@@ -54,6 +56,12 @@ watch(getActivePath, (v) => (activePath.value = v || ''))
       </span>
       <span class="ft-ico"><FileIcon :name="node.entry.name" :is-dir="node.entry.is_dir" :size="15" /></span>
       <span class="ft-name">{{ node.entry.name }}</span>
+      <button
+        v-if="depth === 0 && onRemoveRoot"
+        class="ft-remove"
+        title="从资料库移除（仅注销，不删除文件夹）"
+        @click.stop="onRemoveRoot(node.entry.path)"
+      >✕</button>
     </div>
     <template v-if="node.expanded && node.loaded">
       <FileTreeItem

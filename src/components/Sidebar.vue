@@ -17,12 +17,14 @@ const emit = defineEmits<{
   (e: 'ai-action', action: string): void
   (e: 'add-root'): void
   (e: 'new-file'): void
+  (e: 'import-article'): void
   (e: 'refresh'): void
   (e: 'collapse'): void
   (e: 'open-entry', entry: FileEntry): void
   (e: 'entry-context', entry: FileEntry, ev: MouseEvent): void
   (e: 'toggle-theme'): void
   (e: 'manage-roots'): void
+  (e: 'remove-root', root: string): void
 }>()
 
 const counts = computed(() => kindCounts())
@@ -120,6 +122,24 @@ function focusSearch(e: MouseEvent) {
               <path d="M12 12v6" />
             </svg>
           </button>
+          <button class="add-btn" title="从链接导入文章（生成 md / html）" @click.stop="emit('import-article')">
+            <!-- Lucide link：超链接即「从链接导入」 -->
+            <svg
+              class="ab-ico"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+            </svg>
+          </button>
           <button class="add-btn" title="刷新（左侧树 / 右侧列表 / 索引）" @click.stop="emit('refresh')">
             <!-- Lucide refresh-cw -->
             <svg
@@ -152,6 +172,7 @@ function focusSearch(e: MouseEvent) {
         @open-dir="(e) => emit('open-entry', e)"
         @add-root="emit('add-root')"
         @tree-context="(e, ev) => emit('entry-context', e, ev)"
+        @remove-root="(r) => emit('remove-root', r)"
       />
 
       <template v-if="categories.length">
