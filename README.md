@@ -45,6 +45,7 @@
 ### 文件管理
 - 多资料库目录管理，自动扫描索引，隐藏文件过滤
 - **新建文件**：侧栏资料库标题栏 / 文件浏览器工具栏进入，弹窗选类型（Markdown · 纯文本 · JSON · YAML · TOML · INI · HTML · Shell）与文件名，默认落当前打开目录（可改到其它位置），创建后直接进入编辑
+- **链接导入文章**：侧栏 / 文件浏览器工具栏 / 首页三处入口，弹窗贴入网页链接（公众号文章等）一键生成 `.md` 或 `.html` 落到当前目录；HTML 模式保留原页面内联样式，正文图片自动本地化到 `<文档名>.assets/`（Referer 防盗链下载，失败保留远程链接，60 张 / 20MB 上限）
 - **另存为**：原生保存弹窗另选位置，落盘后页签跟随新文件
 - **分类导航**：Markdown / 文档 / 表格 / 演示 / PDF / 图片 / 代码 / 配置 / 压缩包 / 音视频
 - 文件名与内容全文检索、最近更新列表、多页签并行打开
@@ -146,6 +147,7 @@ MdView
 │   │   ├── PreviewPane.vue         # 多格式预览 / 编辑路由
 │   │   ├── SimilarImages.vue       # 相似图片工具页
 │   │   ├── AiDrawer.vue            # AI 悬浮窗
+│   ├── ImportArticleDialog.vue  # 链接导入文章弹窗
 │   │   └── FileTree.vue / FileBrowser.vue / Sidebar.vue
 │   ├── docx/  pptx/         # Office 解析 / 渲染 / 保存引擎封装
 │   ├── vendor/genoffice/     # GenOffice docx/pptx 引擎（vendored）
@@ -155,6 +157,7 @@ MdView
 │   ├── office.rs            # Office 读写为 Markdown 枢纽 + 转换
 │   ├── images.rs            # 相似图片 dHash 索引
 │   ├── summary.rs           # 批量 AI 摘要 + 缓存
+│   ├── web_import/          # 链接导入文章（抓取 / 正文提取 / 图片本地化）
 │   └── config.rs / lib.rs / main.rs
 ├── scripts/                 # docx/pptx 字节保真验证 harness
 └── assets/readme/           # README 视觉素材

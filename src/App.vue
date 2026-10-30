@@ -2,10 +2,10 @@
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { state, bumpTree, type OpenTab } from './store'
 import { resolveProfile } from './ai'
-import { loadConfig, saveConfig, scanDirectory, indexRoot, deletePath, renamePath, searchFiles, readText, writeText, readOfficeMd, writeOfficeMd, writeBinaryBase64, aiChatStream, summarizeFiles, loadSummaries, clearSummaries, removeImageRecords } from './api'
+import { loadConfig, saveConfig, scanDirectory, indexRoot, deletePath, renamePath, searchFiles, readText, writeText, readOfficeMd, writeOfficeMd, writeBinaryBase64, aiChatStream, summarizeFiles, loadSummaries, clearSummaries, removeImageRecords, localizeHtmlFile, fileFingerprint } from './api'
 import type { FileEntry, AppConfig, NewFileType } from './types'
 import type { PageKey } from './store'
 import { KIND_LABEL } from './types'
@@ -23,6 +23,7 @@ import ConfirmDialog from './components/ConfirmDialog.vue'
 import AiDrawer from './components/AiDrawer.vue'
 import ConvertMenu from './components/ConvertMenu.vue'
 import { parseMarkdown, type MarkdownHeading } from './utils/markdown'
+import { clearLocalizeCache } from './utils/localize'
 import { buildViewer, viewerTypeFor, officeEditable } from './utils/viewer'
 import { convertFileFormat } from './utils/convert'
 import { exportMarkdownPdf } from './utils/exportPdf'
@@ -688,6 +689,121 @@ async function refreshAll() {
   showToast('已刷新')
 }
 
+// ── 文档刷新（手动 ↻ 按钮与轮询自动刷新共用同一刷新主体） ──────────────────
+
+/** 刷新进行中锁：手动刷新 / 轮询自动刷新共用，避免并发重入 */
+let refreshing = false
+
+/**
+ * html 类页签本地化：Rust 读文件 → 下载远端资源 → 把【本地引用】内联为 data: URI
+ * （图片/音视频/PDF 读盘后以 base64 直嵌 HTML）→ 返回完整 HTML（res.html）。
+ * 前端以 srcdoc 同源渲染，图片显示效果与 Chrome 打开本地文件一致，且可直接 Ctrl+F 查找。
+ * 同时写同目录临时文件 `<stem>.localized.html`（res.tempPath）作为回退源。
+ */
+async function localizeTabHtml(t: OpenTab) {
+  t.htmlLocalizing = true
+  try {
+    const res = await localizeHtmlFile(t.entry.path)
+    t.htmlContent = res.html
+    if (res.tempPath) t.htmlSrc = convertFileSrc(res.tempPath)
+  } catch (e) {
+    showToast('HTML 资源本地化失败: ' + String(e))
+  } finally {
+    t.htmlLocalizing = false
+  }
+}
+
+/** 取磁盘指纹写回页签（打开 / 保存 / 刷新后调用，供轮询比对） */
+async function updateFingerprint(t: OpenTab) {
+  try {
+    t.fingerprint = await fileFingerprint(t.entry.path)
+  } catch {
+    t.fingerprint = null
+  }
+}
+
+/** MdPreview 本地化进行中 → 回写页签状态（head loading 条的唯一数据源） */
+function onMdLocalizing(v: boolean) {
+  const t = activeTab.value
+  if (t) t.localizing = v
+}
+
+/** 刷新时页签有未保存修改：先确认丢弃（与关闭页签同一 ConfirmDialog 模式） */
+const pendingRefresh = ref(false)
+
+function confirmRefreshDiscard() {
+  pendingRefresh.value = false
+  const t = activeTab.value
+  if (t) void doRefreshDoc(t)
+}
+
+/** 手动刷新（PreviewPane ↻ 按钮）：脏页签先确认丢弃，再走刷新主体 */
+function onRefreshDoc() {
+  const t = activeTab.value
+  if (!t) return
+  if (t.dirty) {
+    pendingRefresh.value = true
+    return
+  }
+  void doRefreshDoc(t)
+}
+
+/**
+ * 刷新主体：重新从磁盘载入当前页签（手动 / 轮询自动共用）。
+ * - 文本类：重读内容 + 清 MdPreview 本地化缓存使远端资源重新本地化
+ * - html：重建本地化临时文件并击穿 iframe 缓存（临时路径可能不变，靠时间戳强制重载）
+ * - viewer 类（图片/pdf/音视频）：重建 viewer；office 枢纽 md 一并重读
+ * - 完成后同步指纹，轮询才不会把这次刷新判成新的外部变更
+ */
+async function doRefreshDoc(t: OpenTab, auto = false) {
+  if (refreshing) return
+  refreshing = true
+  try {
+    const ext = (t.entry.ext || '').toLowerCase()
+    if (['html', 'htm'].includes(ext)) {
+      // 源码一并重读并清脏：与确认弹窗承诺的「刷新将丢弃未保存修改」一致
+      t.content = await readText(t.entry.path)
+      t.dirty = false
+      // 重跑本地化：重新把资源内联为 data: 并写回 htmlContent，srcdoc 随之重载
+      await localizeTabHtml(t)
+    } else if (viewerTypeFor(t.entry)) {
+      t.viewer = await buildViewer(t.entry)
+      // office 枢纽内容（md）/ csv 原文一并重读，保持编辑态与磁盘一致
+      if (officeEditable(t.entry) && !t.viewer.error) {
+        try {
+          const md = await readOfficeMd(t.entry.path)
+          if (md.length <= MAX_PREVIEW_CHARS) t.content = md
+        } catch {
+          /* md 重读失败则仅刷新预览 */
+        }
+      } else if (['csv', 'tsv'].includes(ext)) {
+        try {
+          t.content = await readText(t.entry.path)
+        } catch {
+          /* 读取失败则仅刷新预览 */
+        }
+      }
+      t.dirty = false
+    } else {
+      const text = await readText(t.entry.path)
+      if (text.length > MAX_PREVIEW_CHARS) {
+        showToast('文件过大，取消刷新')
+        return
+      }
+      t.content = text
+      t.dirty = false
+      clearLocalizeCache(t.entry.path)
+    }
+    t.externalChanged = false
+    await updateFingerprint(t)
+    showToast(auto ? '文件已变更，已自动刷新' : '已刷新')
+  } catch (e) {
+    showToast('刷新失败: ' + String(e))
+  } finally {
+    refreshing = false
+  }
+}
+
 /** 编辑器粘贴截图落盘后：新图片进索引与树 */
 async function onImageSaved() {
   bumpTree()
@@ -724,6 +840,8 @@ async function confirmDelete() {
     pendingDelete.value = null
     // 图片索引同步移除，否则已删文件仍会出现在相似分组里
     removeImageRecords([entry.path]).catch(() => {})
+    // 关闭已打开的对应页签：删除文件后 tab 应自动消失，而非残留并被切回
+    doCloseTab(entry.path)
     bumpTree()
     if (state.page === 'files' || state.page === 'category') {
       await openDir(state.currentDir)
@@ -819,6 +937,7 @@ async function openTab(entry: FileEntry) {
         /* 读取失败则仅预览 */
       }
     }
+    await updateFingerprint(rtab)
     return
   }
 
@@ -836,6 +955,14 @@ async function openTab(entry: FileEntry) {
     ensureWorkspaceView()
     state.activeTabPath = entry.path
     state.selected = entry
+    // 注意：必须取 reactive 代理再赋值，raw 对象上直接写不会触发视图更新（曾导致永久 spinner）
+    const rtab = state.tabs[state.tabs.length - 1]
+    // html 类：Rust 下载远端资源 + 把本地引用内联为 data: URI，返回完整 HTML；
+    // 前端以 srcdoc 同源渲染（不依赖 asset://，图片显示效果同 Chrome 打开本地文件）
+    if (['html', 'htm'].includes((entry.ext || '').toLowerCase())) {
+      await localizeTabHtml(rtab)
+    }
+    await updateFingerprint(rtab)
   } catch (e) {
     showToast('读取失败: ' + String(e))
   }
@@ -885,9 +1012,14 @@ function closeDoc() {
   }
 }
 
+/** 保存进行中锁：Ctrl/Cmd+S 连按防重入（写盘幂等，主要避免并发 toast 轰炸） */
+let saving = false
+
 async function saveCurrent() {
+  if (saving) return
   const t = state.tabs.find((x) => x.entry.path === state.activeTabPath)
   if (!t) return
+  saving = true
   try {
     const ext = (t.entry.ext || '').toLowerCase()
     if (ext === 'docx' || ext === 'xlsx') {
@@ -909,6 +1041,9 @@ async function saveCurrent() {
       await writeTextNoted(t)
     }
     t.dirty = false
+    t.externalChanged = false
+    // 保存即写入：同步指纹，避免轮询把刚保存的文件误判为外部变更又刷新一遍
+    void updateFingerprint(t)
     // office 保存后重建富预览（后端 docx HTML / SheetJS / pptx 懒加载），使预览态与磁盘一致
     if (officeEditable(t.entry) && t.viewer) {
       t.viewer = await buildViewer(t.entry)
@@ -916,6 +1051,8 @@ async function saveCurrent() {
     showToast('已保存')
   } catch (e) {
     showToast('保存失败: ' + String(e))
+  } finally {
+    saving = false
   }
 }
 
@@ -1145,6 +1282,41 @@ const ctxItems = computed<CtxItem[]>(() => {
   return items
 })
 
+// ── 文件变更轮询：3s 比对指纹，外部改动自动刷新（全应用仅此一处实现） ──────────────────
+
+/** 轮询间隔（ms）：应用外改动文件的感知延迟上限 */
+const WATCH_POLL_MS = 3000
+let watchTimer: ReturnType<typeof setInterval> | null = null
+
+/**
+ * 轮询自动刷新：取当前页签文件指纹，与打开 / 上次刷新时比对。
+ * - 不同且页签 dirty（有未存修改）：只打变更标点，不覆盖用户内容
+ * - 不同且干净：走刷新主体（轻 toast，无确认弹窗）
+ * - 本地化 / 刷新进行中：跳过本轮；指纹命令不可用（旧后端）静默跳过
+ */
+async function pollFileChanges() {
+  const t = activeTab.value
+  if (!t || t.entry.kind === 'archive') return
+  if (refreshing || t.localizing || t.htmlLocalizing) return
+  let fp: string | null = null
+  try {
+    fp = await fileFingerprint(t.entry.path)
+  } catch {
+    return
+  }
+  if (!fp || fp === t.fingerprint) return
+  if (t.fingerprint == null) {
+    // 打开时没取到指纹（命令暂不可用）：补齐基线，避免误判为变更立刻刷新
+    t.fingerprint = fp
+    return
+  }
+  if (t.dirty) {
+    t.externalChanged = true
+    return
+  }
+  await doRefreshDoc(t, true)
+}
+
 onMounted(() => {
   // 抑制 webview 默认右键菜单（输入框/可编辑区保留系统菜单）
   document.addEventListener('contextmenu', (ev) => {
@@ -1153,6 +1325,10 @@ onMounted(() => {
   })
   // 调试模式快捷键：Cmd/Ctrl+Shift+I 或 F12 打开/关闭 Webview 调试器
   window.addEventListener('keydown', onDevtoolsKey)
+  // 保存快捷键：Ctrl+S（Win/Linux）/ Cmd+S（mac），不区分平台联合判断
+  window.addEventListener('keydown', onSaveKey)
+  // 文档自动刷新：3s 轮询当前页签文件指纹（dirty 时只标记，不覆盖未存内容）
+  watchTimer = setInterval(() => void pollFileChanges(), WATCH_POLL_MS)
   // 空闲时预加载 office 预览库 chunk，消除首次打开 office 文件的卡顿
   const idle = (window as any).requestIdleCallback || ((cb: any) => setTimeout(cb, 1500))
   idle(() => {
@@ -1163,12 +1339,26 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onDevtoolsKey)
+  window.removeEventListener('keydown', onSaveKey)
+  if (watchTimer) clearInterval(watchTimer)
+  watchTimer = null
 })
 
 function onDevtoolsKey(e: KeyboardEvent) {
   if (e.key === 'F12' || ((e.metaKey || e.ctrlKey) && e.shiftKey && e.code === 'KeyI')) {
     e.preventDefault()
     invoke('toggle_devtools').catch(() => {})
+  }
+}
+
+/**
+ * 保存快捷键：Ctrl+S / Cmd+S → preventDefault（拦住浏览器「保存网页」）后走 saveCurrent。
+ * 连按防重入在 saveCurrent 内（saving 锁）。已知限制：iframe 聚焦时按键被 iframe 吃掉，收不到。
+ */
+function onSaveKey(e: KeyboardEvent) {
+  if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S' || e.code === 'KeyS')) {
+    e.preventDefault()
+    void saveCurrent()
   }
 }
 
@@ -1249,6 +1439,7 @@ onMounted(init)
             :active-tab-path="state.activeTabPath"
             :viewer="activeViewer"
             :base-path="activeBaseDir"
+            :doc-path="activeTab ? activeTab.entry.path : null"
             :edit-on-open="justCreatedPath"
             @switch-tab="switchTab"
             @close-tab="requestCloseTab"
@@ -1260,6 +1451,8 @@ onMounted(init)
             @close="closeDoc"
             @open-ai="openAiDrawer"
             @dirty="markOfficeDirty"
+            @refresh-doc="onRefreshDoc"
+            @localizing="onMdLocalizing"
           />
         <FileBrowser
           v-else
@@ -1345,6 +1538,16 @@ onMounted(init)
       confirm-text="丢弃并关闭"
       @confirm="confirmCloseTab"
       @cancel="pendingClosePath = null"
+    />
+
+    <ConfirmDialog
+      v-if="pendingRefresh"
+      title="刷新文档"
+      :message="`「${activeTab ? activeTab.entry.name : ''}」有未保存的修改，刷新将丢弃。确定刷新吗？`"
+      :danger="true"
+      confirm-text="丢弃并刷新"
+      @confirm="confirmRefreshDiscard"
+      @cancel="pendingRefresh = false"
     />
 
     <!-- 自定义右键菜单 -->

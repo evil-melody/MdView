@@ -39,12 +39,8 @@ const emit = defineEmits<{
   (e: 'entry-context', entry: FileEntry, ev: MouseEvent): void
 }>()
 
-/** 本地高亮路径：单击仅选中高亮，双击才真正打开 */
+/** 单击即打开（与侧栏树一致），emit('open') 由上层 onSelect 处理 */
 const highlighted = ref<string | null>(null)
-function onCardClick(e: FileEntry) {
-  highlighted.value = e.path
-  emit('select', e)
-}
 function onCardOpen(e: FileEntry) {
   highlighted.value = e.path
   emit('open', e)
@@ -249,8 +245,7 @@ function summaryFull(p: string): string {
         :key="e.path"
         class="card"
         :class="{ dir: e.is_dir, sel: isSelected(e.path) }"
-        @click="onCardClick(e)"
-        @dblclick="onCardOpen(e)"
+        @click="onCardOpen(e)"
         @contextmenu.prevent="emit('entry-context', e, $event)"
       >
         <div class="card-icon"><FileIcon :name="e.name" :is-dir="e.is_dir" :size="30" /></div>
@@ -299,8 +294,7 @@ function summaryFull(p: string): string {
         :key="e.path"
         class="row"
         :class="{ sel: isSelected(e.path) }"
-        @click="onCardClick(e)"
-        @dblclick="onCardOpen(e)"
+        @click="onCardOpen(e)"
         @contextmenu.prevent="emit('entry-context', e, $event)"
       >
         <span class="row-icon"><FileIcon :name="e.name" :is-dir="e.is_dir" :size="18" /></span>

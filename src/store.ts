@@ -16,6 +16,20 @@ export interface OpenTab {
   content: string
   dirty: boolean
   viewer?: TabViewer
+  /** md 远端资源本地化进行中（预览头部 loading 条数据源） */
+  localizing?: boolean
+  /** html 远端资源本地化进行中（同上） */
+  htmlLocalizing?: boolean
+  /** 文件指纹：打开 / 保存 / 刷新时更新，轮询比对磁盘变动用 */
+  fingerprint?: string | null
+  /** html 预览内容：本地化后的 HTML 全文（srcdoc 同源注入 iframe；与 App 同源 → 图片可显示 + 可 Ctrl+F） */
+  htmlContent?: string
+  /** html 回退源：本地化临时文件的 asset:// 地址（仅在无 htmlContent 时使用） */
+  htmlSrc?: string
+  /** html 重载序号：本地化 / 刷新时自增，绑定到 iframe :key 强制重渲染 */
+  htmlRev?: number
+  /** 文件已在外部修改、但页签有未保存内容：页签打标点，刷新 / 保存后清除 */
+  externalChanged?: boolean
 }
 
 interface AppState {

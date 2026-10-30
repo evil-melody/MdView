@@ -135,7 +135,20 @@ watch(
 )
 
 // ---- 搜索过滤视图（基于全量索引，不扫盘） ----
+// 防抖：输入时不对全量索引做 O(N) 扫描，停顿 ~220ms 才重算，避免逐字卡顿
+const debouncedFilter = ref(props.filter || '')
+let filterTimer: ReturnType<typeof setTimeout> | null = null
+watch(
+  () => props.filter,
+  (v) => {
+    if (filterTimer) clearTimeout(filterTimer)
+    filterTimer = setTimeout(() => (debouncedFilter.value = v || ''), 220)
+  },
+  { immediate: true }
+)
 const FILTER_RENDER_CAP = 400
+// 命中总数：在一次 filteredRoots 扫描里顺手记下来，避免 filterTotal 再扫一遍全量索引
+const filterMatchCount = ref(0)
 
 function dirEntry(path: string, name: string): FileEntry {
   return { name, path, is_dir: true, ext: '', size: 0, modified: '', kind: 'folder' }
@@ -154,7 +167,7 @@ function matchesQuery(e: FileEntry, q: string): boolean {
 
 /** 命中文件按目录链分组；目录节点预展开、预加载，不触发 scanDirectory */
 const filteredRoots = computed<TreeNode[] | null>(() => {
-  const q = props.filter?.trim().toLowerCase()
+  const q = debouncedFilter.value.trim().toLowerCase()
   if (!q) return null
   const rootPaths = [...props.roots].sort((a, b) => b.length - a.length)
   const rootOf = new Map<string, TreeNode>()
@@ -200,16 +213,13 @@ const filteredRoots = computed<TreeNode[] | null>(() => {
     const parent = dirNodeFor(e.path.slice(0, Math.max(e.path.lastIndexOf('/'), e.path.lastIndexOf('\\'))))
     if (parent) parent.children.push(toNode(e))
   }
+  filterMatchCount.value = matchCount
   if (!matchCount) return []
   return [...rootOf.values()]
 })
 
-const filterActive = computed(() => !!props.filter?.trim())
-const filterTotal = computed(() => {
-  const q = props.filter?.trim().toLowerCase()
-  if (!q) return 0
-  return state.indexEntries.filter((e) => !e.is_dir && matchesQuery(e, q)).length
-})
+const filterActive = computed(() => !!debouncedFilter.value.trim())
+const filterTotal = computed(() => (debouncedFilter.value.trim() ? filterMatchCount.value : 0))
 </script>
 
 <template>

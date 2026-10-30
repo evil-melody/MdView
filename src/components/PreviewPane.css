@@ -54,6 +54,11 @@
   font-size: 10px;
 }
 
+/* 文件已在外部修改（页签有未存内容，轮询只标记不覆盖） */
+.dirty-dot-warn {
+  color: var(--orange);
+}
+
 .tabs {
   display: flex;
   gap: 4px;
@@ -87,10 +92,23 @@
   flex-shrink: 0;
 }
 
+/* 刷新按钮：与同排文字按钮等高，仅图标 */
+.refresh-btn {
+  width: 34px;
+  padding: 0;
+  justify-content: center;
+  color: var(--text-2);
+}
+
+.refresh-btn:hover {
+  color: var(--accent);
+}
+
 .pane-body {
   flex: 1;
   display: flex;
   min-height: 0;
+  position: relative;
 }
 
 /* 大纲：贴右竖条 tab + 展开悬浮面板（对标 InspireLoom） */
@@ -485,6 +503,11 @@
   font-size: 9px;
 }
 
+/* 文件已在外部修改（有未存内容）：橙色标点，刷新 / 保存后消失 */
+.ts-dot-warn {
+  color: var(--orange);
+}
+
 .ts-close {
   width: 16px;
   height: 16px;
@@ -586,4 +609,19 @@
 .find-close:hover {
   background: var(--panel-2);
   color: var(--text);
+}
+
+/* 预览态查找高亮：渲染区文本节点包裹的 <mark>，主题色跟随 */
+.md-find {
+  background: var(--find-mark, rgba(255, 214, 0, 0.42));
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+  scroll-margin: 80px;
+}
+
+.md-find-current {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }

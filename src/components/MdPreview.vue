@@ -2,9 +2,24 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import DOMPurify from 'dompurify'
 import { parseMarkdown, resolveLocalAssets, MDVIEW_ALLOWED_URI } from '../utils/markdown'
+import { hasRemoteRefs, localizeMdHtml } from '../utils/localize'
 import { nextFrame, splitSafeChunks } from '../utils/stream-html'
+import { htmlToMarkdown } from '../utils/htmlToMarkdown'
 
-const props = defineProps<{ content: string; dirty: boolean; basePath?: string | null }>()
+const props = defineProps<{
+  content: string
+  dirty: boolean
+  /** 文档绝对路径：md 远端资源本地化用（App 经 PreviewPane 透传 entry.path） */
+  docPath: string
+  basePath?: string | null
+  /** 所见即所得：预览区可直接编辑，输入回写为 Markdown 源（emit update:content） */
+  editable?: boolean
+}>()
+
+const emit = defineEmits<{
+  (e: 'localizing', v: boolean): void
+  (e: 'update:content', v: string): void
+}>()
 
 const bodyEl = ref<HTMLElement>()
 /** 已净化的完整 HTML：主题切换时直接复用，无需重解析 */
@@ -37,6 +52,11 @@ async function runMermaid() {
   if (!el) return
   const nodes = Array.from(el.querySelectorAll<HTMLElement>('.mermaid:not([data-processed])'))
   if (!nodes.length) return
+  // 渲染前把 mermaid 源码存入 data 属性：mermaid.run 会把 div 内容换成 SVG，
+  // 所见即所得编辑回写时需从 data 取回源码，否则脑图会在保存时被洗掉
+  for (const n of nodes) {
+    if (!n.dataset.mermaidSrc) n.dataset.mermaidSrc = n.textContent || ''
+  }
   try {
     const mermaid = await getMermaid(currentMermaidTheme())
     await mermaid.run({ nodes })
@@ -52,7 +72,22 @@ async function runMermaid() {
  */
 async function streamRender(content: string) {
   const token = ++streamToken
-  const { html: raw } = parseMarkdown(content)
+  const { html: parsed } = parseMarkdown(content)
+  let raw = parsed
+  // 远端资源本地化：仅初始加载 / 刷新后（dirty=false）触发，编辑中跳过；
+  // 结果按文档+内容缓存，同内容重复渲染不重复下载
+  if (!props.dirty && props.docPath && hasRemoteRefs(raw)) {
+    emit('localizing', true)
+    try {
+      raw = await localizeMdHtml(props.docPath, raw)
+    } catch (e) {
+      // 本地化失败按原样渲染，不阻塞预览
+      console.warn('md localize failed:', e)
+    }
+    // 内容已变（用户开始编辑 / 又打开别的文件）：loading 状态交给新一轮渲染管
+    if (token !== streamToken) return
+    emit('localizing', false)
+  }
   const safe = DOMPurify.sanitize(resolveLocalAssets(raw, props.basePath), {
     ALLOWED_URI_REGEXP: MDVIEW_ALLOWED_URI
   })
@@ -69,8 +104,33 @@ async function streamRender(content: string) {
   if (token === streamToken) await runMermaid()
 }
 
-/** 内容变化：增量解析 + 流式注入，正文逐段出现 */
-watch(() => props.content, streamRender, { immediate: true })
+/** 所见即所得编辑回写时记录最后发出的源，避免父层回写 props.content 触发整页重渲染（丢光标） */
+const lastEmitted = ref('')
+
+/** 内容变化：增量解析 + 流式注入，正文逐段出现。
+ *  自己编辑回写的 content 与 lastEmitted 相同 → 跳过重渲染。 */
+watch(
+  () => props.content,
+  (c) => {
+    if (c === lastEmitted.value) return
+    void streamRender(c)
+  },
+  { immediate: true }
+)
+
+/** 所见即所得：编辑防抖回写为 Markdown 源（mermaid 经 data 属性保真） */
+let inputTimer: ReturnType<typeof setTimeout> | undefined
+function onBodyInput() {
+  if (!props.editable) return
+  if (inputTimer) clearTimeout(inputTimer)
+  inputTimer = setTimeout(() => {
+    const el = bodyEl.value
+    if (!el) return
+    const md = htmlToMarkdown(el, props.basePath)
+    lastEmitted.value = md
+    emit('update:content', md)
+  }, 250)
+}
 
 /** 主题变化：重建 DOM 清掉已渲染的 SVG，再按新主题重渲染（整份替换，切换主题属低频操作） */
 async function rerenderForTheme() {
@@ -97,6 +157,8 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   streamToken++ // 取消在途流式渲染
+  // 本地化在途时被卸载（切页签 / 切预览模式）：兜底清 loading，避免父组件条子卡住
+  emit('localizing', false)
   themeObserver?.disconnect()
   themeObserver = null
 })
@@ -106,7 +168,13 @@ defineExpose({ getScrollEl: () => bodyEl.value })
 </script>
 
 <template>
-  <div ref="bodyEl" class="md-body scrollable"></div>
+  <div
+    ref="bodyEl"
+    class="md-body scrollable"
+    :class="{ 'md-editable': editable }"
+    :contenteditable="editable ? 'true' : undefined"
+    @input="onBodyInput"
+  ></div>
 </template>
 
 <style src="./MdPreview.css"></style>

@@ -4,6 +4,18 @@
   font-size: 15px;
   color: var(--text);
   margin: 0 auto;
+  /* 超长不可断词（URL/Base64/压缩 JSON）也能折行，避免横向溢出被 .flex1 裁掉 */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* 所见即所得：预览区可编辑时给出光标与轻微底色提示，仍可正常滚动 */
+.md-body.md-editable {
+  outline: none;
+  cursor: text;
+}
+.md-body.md-editable:focus {
+  background: color-mix(in srgb, var(--accent-soft) 35%, transparent);
 }
 
 .md-body h1,
@@ -56,6 +68,10 @@
   color: var(--text);
   border-radius: 8px;
   padding: 14px 16px;
+  /* 长行自动换行（不再横向溢出被裁切）；个别超长不可断 token 仍可由 overflow-x 提供横向滚动 */
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
   overflow-x: auto;
   margin: 1em 0;
 }

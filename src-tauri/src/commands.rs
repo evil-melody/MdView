@@ -51,6 +51,10 @@ fn to_entry(path: &Path) -> Option<FileEntry> {
     if name.starts_with('.') {
         return None;
     }
+    // HTML 预览本地化临时文件（<stem>.localized.html）是内部产物，不进列表
+    if name.ends_with(".localized.html") {
+        return None;
+    }
     let modified: String = meta
         .modified()
         .ok()

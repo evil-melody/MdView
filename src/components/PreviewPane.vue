@@ -13,6 +13,7 @@ import FileIcon from './FileIcon.vue'
 import { viewerTypeFor, officeEditable } from '../utils/viewer'
 import { isCodeFile } from '../utils/codeLang'
 import { clipboardImageBlob, saveClipboardImage } from '../utils/pasteImage'
+import { createDomFind, iframeFindCss, IFRAME_FIND_STYLE_ID } from '../utils/domFind'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import type { TabViewer } from '../store'
 
@@ -26,6 +27,8 @@ const props = defineProps<{
   activeTabPath?: string | null
   viewer?: TabViewer | null
   basePath?: string | null
+  /** 当前文档绝对路径：md 远端资源本地化用（透传给 MdPreview） */
+  docPath?: string | null
   /** 新建文件的路径：命中时打开即切到「编辑」页签 */
   editOnOpen?: string | null
 }>()
@@ -41,6 +44,9 @@ const emit = defineEmits<{
   (e: 'open-ai'): void
   (e: 'dirty'): void
   (e: 'image-saved'): void
+  (e: 'refresh-doc'): void
+  /** MdPreview 本地化进行中 → 上抛 App 写回页签（loading 条单一数据源） */
+  (e: 'localizing', v: boolean): void
 }>()
 
 const tab = ref<ViewTab>('preview')
@@ -114,9 +120,19 @@ const codePreview = computed(() => (isCode.value ? props.content : ''))
 const isHtml = computed(
   () => !!props.entry && ['html', 'htm'].includes((props.entry.ext || '').toLowerCase())
 )
-const htmlSrc = computed(() =>
-  isHtml.value && props.entry ? convertFileSrc(props.entry.path) : ''
+
+/** 当前激活页签对象：html 本地化状态 / iframe 源都挂在页签上（单一数据源） */
+const activeTabObj = computed<OpenTab | null>(
+  () => props.tabs?.find((t) => t.entry.path === props.activeTabPath) ?? null
 )
+
+/** html iframe 源：优先用 Rust 内联后的完整 HTML（srcdoc 同源渲染，图片以 data: 直嵌，
+ *  不依赖 asset://）；仅当无 htmlContent 时回退到本地化临时文件的 asset:// 地址。 */
+const htmlContent = computed(() => activeTabObj.value?.htmlContent ?? '')
+const htmlSrc = computed(() => {
+  if (!isHtml.value || !props.entry) return ''
+  return activeTabObj.value?.htmlSrc ?? convertFileSrc(props.entry.path)
+})
 
 function selectTab(t: ViewTab) {
   if (t !== 'mindmap' && !canEdit.value && t !== 'preview') return
@@ -197,10 +213,15 @@ async function commitPptx(): Promise<boolean> {
   return true
 }
 
-// ---- 查找 / 替换（当前可见编辑器，editorEl 在 v-if 下只指向挂载的那个） ----
+// ---- 查找 / 替换 ----
+// 两套查找表面：预览态（渲染后的 MD / 代码 <pre>）走 DOM 高亮跳转；
+// 编辑态（textarea 源）走选区匹配。editorEl 在 v-if 下只指向当前挂载的那个。
 const editorEl = ref<HTMLTextAreaElement | null>(null)
 const findInputEl = ref<HTMLInputElement | null>(null)
 const mdPreviewRef = ref<InstanceType<typeof MdPreview> | null>(null)
+const codeViewEl = ref<HTMLElement | null>(null)
+/** html 预览 iframe：用于注入 Ctrl/Cmd+S 转发（iframe 聚焦时按键被其吃掉） */
+const htmlFrame = ref<HTMLIFrameElement | null>(null)
 
 const findOpen = ref(false)
 const findQuery = ref('')
@@ -208,6 +229,35 @@ const findReplace = ref('')
 const findCase = ref(false)
 const findMatches = ref<{ start: number; end: number }[]>([])
 const findIndex = ref(-1)
+/** 统一显示用计数（DOM 与文本两套共用），避免模板里两套变量 */
+const findCount = ref(0)
+const findCur = ref(-1)
+/** 当前查找表面是否为渲染 DOM（决定替换控件是否可用） */
+const findIsDom = ref(false)
+
+/** 预览态 DOM 查找句柄：根容器在 MD 时为 MdPreview 正文、代码时为 <pre>、
+ *  HTML 预览（srcdoc 同源 iframe）时为 iframe 的 document.body。 */
+const domFind = createDomFind(() => {
+  if (isHtml.value) {
+    return (htmlFrame.value?.contentDocument?.body as HTMLElement | null) ?? null
+  }
+  return mdPreviewRef.value?.getScrollEl() ?? codeViewEl.value
+})
+
+/** 当前查找表面：dom=渲染预览，text=源编辑，none=无（iframe / CodeEditor 自带） */
+function findSurface(): 'dom' | 'text' | 'none' {
+  if (tab.value === 'preview') {
+    // HTML 预览：Rust 已把资源内联为 data: 并以 srcdoc 同源渲染，父窗口可直接读 iframe
+    // DOM 做查找高亮；无 htmlContent（回退 asset://）时跨域不可查，交回 none。
+    if (isHtml.value) return htmlContent.value ? 'dom' : 'none'
+    return 'dom' // MD 渲染区 / 代码 <pre>
+  }
+  if (tab.value === 'edit') {
+    if (isCode.value) return 'none' // CodeEditor 自带查找
+    return editorEl.value ? 'text' : 'none'
+  }
+  return 'none'
+}
 
 /** 转义正则元字符，避免查询词里的 . * ( ) 等被当成正则语法 */
 function escapeRegExp(s: string): string {
@@ -216,22 +266,45 @@ function escapeRegExp(s: string): string {
 
 /** 按 findQuery / findCase 重新计算全部命中；空查询则清空；可传 text 直接基于新内容计算 */
 function recomputeMatches(text?: string) {
-  const src = text ?? props.content
   const q = findQuery.value
-  findMatches.value = []
-  findIndex.value = -1
-  if (!q) return
-  const re = new RegExp(escapeRegExp(q), findCase.value ? 'g' : 'gi')
-  let m: RegExpExecArray | null
-  // 全局匹配逐个推进 lastIndex；零长匹配时手动 +1，避免死循环
-  while ((m = re.exec(src)) !== null) {
-    if (m[0].length === 0) {
-      re.lastIndex++
-      continue
-    }
-    findMatches.value.push({ start: m.index, end: m.index + m[0].length })
+  if (!q) {
+    findMatches.value = []
+    findIndex.value = -1
+    domFind.clear()
+    findCount.value = 0
+    findCur.value = -1
+    findIsDom.value = false
+    return
   }
-  if (findMatches.value.length) findIndex.value = 0
+  const surf = findSurface()
+  findIsDom.value = surf === 'dom'
+  if (surf === 'dom') {
+    findMatches.value = []
+    findIndex.value = -1
+    findCount.value = domFind.find(q, findCase.value)
+    findCur.value = domFind.current
+  } else if (surf === 'text') {
+    domFind.clear()
+    const src = text ?? props.content
+    const re = new RegExp(escapeRegExp(q), findCase.value ? 'g' : 'gi')
+    let m: RegExpExecArray | null
+    // 全局匹配逐个推进 lastIndex；零长匹配时手动 +1，避免死循环
+    while ((m = re.exec(src)) !== null) {
+      if (m[0].length === 0) {
+        re.lastIndex++
+        continue
+      }
+      findMatches.value.push({ start: m.index, end: m.index + m[0].length })
+    }
+    if (findMatches.value.length) findIndex.value = 0
+    findCount.value = findMatches.value.length
+    findCur.value = findIndex.value
+  } else {
+    findMatches.value = []
+    findIndex.value = -1
+    findCount.value = 0
+    findCur.value = -1
+  }
 }
 
 /** 选中当前命中并聚焦，使其进入视野（仅在 next/prev/替换 时调用，避免抢走查找框焦点） */
@@ -245,16 +318,28 @@ function selectCurrentMatch() {
 }
 
 function findNext() {
+  if (findSurface() === 'dom') {
+    domFind.next()
+    findCur.value = domFind.current
+    return
+  }
   if (findMatches.value.length === 0) return
   findIndex.value = (findIndex.value + 1) % findMatches.value.length
   selectCurrentMatch()
+  findCur.value = findIndex.value
 }
 
 function findPrev() {
+  if (findSurface() === 'dom') {
+    domFind.prev()
+    findCur.value = domFind.current
+    return
+  }
   if (findMatches.value.length === 0) return
   findIndex.value =
     (findIndex.value - 1 + findMatches.value.length) % findMatches.value.length
   selectCurrentMatch()
+  findCur.value = findIndex.value
 }
 
 /** 替换当前命中：通过 emit 回写 prop（不能直接改），再基于新内容重算 */
@@ -270,6 +355,7 @@ function replaceCurrent() {
     findIndex.value = findMatches.value.length ? findMatches.value.length - 1 : -1
   }
   selectCurrentMatch()
+  findCur.value = findIndex.value
 }
 
 /** 替换全部：String.replace 全替换后回写 */
@@ -289,6 +375,7 @@ function onFindInput(e: Event) {
 async function openFind() {
   findOpen.value = true
   await nextTick()
+  recomputeMatches()
   findInputEl.value?.focus()
   findInputEl.value?.select()
 }
@@ -297,6 +384,10 @@ function closeFind() {
   findOpen.value = false
   findMatches.value = []
   findIndex.value = -1
+  findCount.value = 0
+  findCur.value = -1
+  findIsDom.value = false
+  domFind.clear()
   editorEl.value?.focus()
 }
 
@@ -356,13 +447,60 @@ function bindPreviewScroll() {
 
 function onWindowKeydown(e: KeyboardEvent) {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
-    if (tab.value === 'edit' && editorEl.value) {
-      e.preventDefault()
-      openFind()
-    }
+    // 无可用查找面（HTML iframe / CodeEditor 自带）时交给各自处理，不抢键
+    if (findSurface() === 'none') return
+    e.preventDefault()
+    openFind()
   } else if (e.key === 'Escape' && findOpen.value) {
     e.preventDefault()
     closeFind()
+  }
+}
+
+/** html 预览 iframe 加载完成：从父窗口侧向 iframe 注入按键转发（Ctrl/Cmd+S 保存、Ctrl/Cmd+F 查找）。
+ *  iframe 聚焦时按键被其吃掉、父 window 的 keydown 收不到，故必须在 iframe 的 window 上补监听。
+ *  不依赖 Rust 内联的桥接脚本（srcdoc 文档若因 CSP / 脚本被剥离而未执行，内联桥接即失效），
+ *  跨域注入抛错时才由 onBridgeMessage 兜底。
+ *  同时注入查找高亮样式：父窗口 CSS 不跨文档生效，iframe 内的 <mark> 需自带样式。 */
+function onHtmlFrameLoad() {
+  const f = htmlFrame.value
+  if (!f) return
+  try {
+    const w = f.contentWindow
+    const d = f.contentDocument
+    if (!w) return
+    if (d?.head && !d.getElementById(IFRAME_FIND_STYLE_ID)) {
+      const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#4c8dff'
+      const st = d.createElement('style')
+      st.id = IFRAME_FIND_STYLE_ID
+      st.textContent = iframeFindCss(accent)
+      d.head.appendChild(st)
+    }
+    w.addEventListener('keydown', (ev: KeyboardEvent) => {
+      if (!(ev.ctrlKey || ev.metaKey)) return
+      if (ev.key === 's' || ev.key === 'S' || ev.code === 'KeyS') {
+        ev.preventDefault()
+        emit('save')
+      } else if (ev.key === 'f' || ev.key === 'F' || ev.code === 'KeyF') {
+        ev.preventDefault()
+        void openFind()
+      }
+    })
+  } catch {
+    /* 跨域 iframe 无法注入，交给 onBridgeMessage 兜底 */
+  }
+}
+
+/** 接收 HTML 预览 iframe 内「桥接」脚本发来的信号：
+ *  - save：Ctrl/Cmd+S → 父窗口保存
+ *  - find：Ctrl/Cmd+F → 父窗口打开查找栏（iframe 聚焦时按键被其吃掉，父 window 收不到） */
+function onBridgeMessage(ev: MessageEvent) {
+  const data = ev.data as { __mdview?: string } | null
+  if (!data) return
+  if (data.__mdview === 'save') {
+    emit('save')
+  } else if (data.__mdview === 'find') {
+    openFind()
   }
 }
 
@@ -375,12 +513,24 @@ watch(
     if (findOpen.value && findQuery.value) recomputeMatches()
   }
 )
+// 切页签 / 视图模式：清掉预览 DOM 高亮，避免回到预览时残留旧标记；
+// 若查找栏仍开着且有关键词，切回后重算以恢复高亮
+watch(tab, () => {
+  if (findOpen.value) {
+    domFind.clear()
+    findCount.value = 0
+    findCur.value = -1
+    if (findQuery.value) nextTick(() => recomputeMatches())
+  }
+})
 
 onMounted(() => {
   window.addEventListener('keydown', onWindowKeydown)
+  window.addEventListener('message', onBridgeMessage)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onWindowKeydown)
+  window.removeEventListener('message', onBridgeMessage)
   if (boundPreviewEl) {
     boundPreviewEl.removeEventListener('scroll', onPreviewScroll)
     boundPreviewEl = null
@@ -404,6 +554,7 @@ defineExpose({ exportOffice, commitPptx })
         <span class="ts-ico"><FileIcon :name="t.entry.name" :is-dir="t.entry.is_dir" :size="14" /></span>
         <span class="ts-name">{{ t.entry.name }}</span>
         <span v-if="t.dirty" class="ts-dot" title="未保存">●</span>
+        <span v-else-if="t.externalChanged" class="ts-dot ts-dot-warn" title="文件已在外部修改，刷新后同步">●</span>
         <button class="ts-close" title="关闭页签" @click.stop="emit('close-tab', t.entry.path)">×</button>
       </div>
     </div>
@@ -413,6 +564,7 @@ defineExpose({ exportOffice, commitPptx })
         <span class="fname">{{ entry ? entry.name : '未选择文件' }}</span>
         <span v-if="entry" class="ftag">{{ kindLabel[entry.kind] }}</span>
         <span v-if="dirty" class="dirty-dot" title="未保存">●</span>
+        <span v-else-if="activeTabObj?.externalChanged" class="dirty-dot dirty-dot-warn" title="文件已在外部修改，刷新后同步">●</span>
       </div>
       <div v-if="!isViewerKind" class="tabs">
         <button
@@ -434,6 +586,17 @@ defineExpose({ exportOffice, commitPptx })
         >脑图</button>
       </div>
       <div class="head-actions">
+        <button
+          v-if="entry && entry.kind !== 'archive'"
+          class="btn ghost icon-btn refresh-btn"
+          title="刷新：重新读取文件内容（丢弃未保存修改前会先确认）"
+          @click="emit('refresh-doc')"
+        >
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M13.5 8a5.5 5.5 0 1 1-1.61-3.89" />
+            <path d="M13.7 2.6v2.5h-2.5" />
+          </svg>
+        </button>
         <button
           v-if="canEdit"
           class="btn"
@@ -490,15 +653,47 @@ defineExpose({ exportOffice, commitPptx })
               v-else-if="isPptx"
               :path="entry!.path"
             />
-            <!-- html：原生 webview 渲染（浏览器方式，脚本/相对资源照常加载） -->
+            <!-- html：Rust 已把图片内联为 data: 并以 srcdoc 同源渲染（不依赖 asset://，
+                 图片显示效果与 Chrome 打开本地文件一致，且可直接 Ctrl+F 查找高亮）。
+                 仅在无 htmlContent 时回退到本地化临时文件的 asset:// 地址。 -->
+            <iframe
+              v-else-if="isHtml && htmlContent"
+              ref="htmlFrame"
+              class="html-frame"
+              :srcdoc="htmlContent"
+              :title="entry?.name || 'HTML 预览'"
+              @load="onHtmlFrameLoad"
+            ></iframe>
             <iframe
               v-else-if="isHtml"
+              ref="htmlFrame"
               class="html-frame"
               :src="htmlSrc"
               :title="entry?.name || 'HTML 预览'"
+              @load="onHtmlFrameLoad"
             ></iframe>
-            <MdPreview v-else-if="!isCode" :content="content" :dirty="dirty" :base-path="basePath" />
-            <pre v-else class="code-view scrollable">{{ codePreview }}</pre>
+            <MdPreview
+              v-else-if="!isCode"
+              ref="mdPreviewRef"
+              :content="content"
+              :dirty="dirty"
+              :doc-path="entry ? entry.path : ''"
+              :base-path="basePath"
+              :editable="tab === 'preview'"
+              @localizing="emit('localizing', $event)"
+              @update:content="(v: string) => emit('update:content', v)"
+            />
+            <pre v-else ref="codeViewEl" class="code-view scrollable">{{ codePreview }}</pre>
+            <!-- 预览态查找栏：渲染区 DOM 高亮跳转（编辑态另有分屏查找栏） -->
+            <div v-if="findOpen && tab === 'preview'" class="find-bar">
+              <input ref="findInputEl" class="find-input" :value="findQuery" placeholder="在预览中查找"
+                @input="onFindInput" @keydown.enter.prevent="findNext" @keydown.shift.enter.prevent="findPrev" />
+              <button class="find-btn" title="上一个 (Shift+Enter)" @click="findPrev">↑</button>
+              <button class="find-btn" title="下一个 (Enter)" @click="findNext">↓</button>
+              <label class="find-case"><input type="checkbox" v-model="findCase" @change="() => recomputeMatches()" />区分大小写</label>
+              <span class="find-count">{{ findCount ? (findCur + 1) + ' / ' + findCount : '0 / 0' }}</span>
+              <button class="find-close" title="关闭 (Esc)" @click="closeFind">×</button>
+            </div>
           </div>
           <div v-else-if="tab === 'edit' && isOffice" class="flex1">
             <!-- docx：原生编辑（自绘受控 DOM + 图片/表格 + 原生 .docx 保存） -->
@@ -552,7 +747,7 @@ defineExpose({ exportOffice, commitPptx })
               <button class="find-btn" title="替换当前" @click="replaceCurrent">替换</button>
               <button class="find-btn" title="替换全部" @click="replaceAll">全部</button>
               <label class="find-case"><input type="checkbox" v-model="findCase" @change="() => recomputeMatches()" />区分大小写</label>
-              <span class="find-count">{{ findMatches.length ? (findIndex + 1) + ' / ' + findMatches.length : '0 / 0' }}</span>
+              <span class="find-count">{{ findCount ? (findCur + 1) + ' / ' + findCount : '0 / 0' }}</span>
               <button class="find-close" title="关闭 (Esc)" @click="closeFind">×</button>
             </div>
           </div>
@@ -584,7 +779,7 @@ defineExpose({ exportOffice, commitPptx })
               <button class="find-btn" title="替换当前" @click="replaceCurrent">替换</button>
               <button class="find-btn" title="替换全部" @click="replaceAll">全部</button>
               <label class="find-case"><input type="checkbox" v-model="findCase" @change="() => recomputeMatches()" />区分大小写</label>
-              <span class="find-count">{{ findMatches.length ? (findIndex + 1) + ' / ' + findMatches.length : '0 / 0' }}</span>
+              <span class="find-count">{{ findCount ? (findCur + 1) + ' / ' + findCount : '0 / 0' }}</span>
               <button class="find-close" title="关闭 (Esc)" @click="closeFind">×</button>
             </div>
           </div>
@@ -599,7 +794,14 @@ defineExpose({ exportOffice, commitPptx })
               spellcheck="false"
             ></textarea>
             <div class="editor-live flex1">
-              <MdPreview ref="mdPreviewRef" :content="content" :dirty="dirty" :base-path="basePath" />
+              <MdPreview
+                ref="mdPreviewRef"
+                :content="content"
+                :dirty="dirty"
+                :doc-path="entry ? entry.path : ''"
+                :base-path="basePath"
+                @localizing="emit('localizing', $event)"
+              />
             </div>
             <div v-if="findOpen" class="find-bar">
               <input ref="findInputEl" class="find-input" :value="findQuery" placeholder="查找"
@@ -611,7 +813,7 @@ defineExpose({ exportOffice, commitPptx })
               <button class="find-btn" title="替换当前" @click="replaceCurrent">替换</button>
               <button class="find-btn" title="替换全部" @click="replaceAll">全部</button>
               <label class="find-case"><input type="checkbox" v-model="findCase" @change="() => recomputeMatches()" />区分大小写</label>
-              <span class="find-count">{{ findMatches.length ? (findIndex + 1) + ' / ' + findMatches.length : '0 / 0' }}</span>
+              <span class="find-count">{{ findCount ? (findCur + 1) + ' / ' + findCount : '0 / 0' }}</span>
               <button class="find-close" title="关闭 (Esc)" @click="closeFind">×</button>
             </div>
           </div>

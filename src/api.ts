@@ -89,6 +89,30 @@ export const writeBinaryBase64 = (path: string, contents: string) =>
 export const writeText = (path: string, content: string) =>
   invoke<boolean>('write_text', { path, content })
 
+/**
+ * md 管线本地化：传渲染后的 html + 文档路径，Rust 下载远端资源、
+ * 改写为本地地址后返回新 html（无远端引用时原样返回）。
+ */
+export const localizeMdHtml = (html: string, docPath: string) =>
+  invoke<{ html: string; downloaded: number; skipped: number }>('localize_md_html', {
+    html,
+    docPath
+  })
+
+/**
+ * html 管线本地化：Rust 读文件 → 下载远端资源 → absolutize → 写临时文件，
+ * 返回本地化 HTML 绝对路径（文档同目录隐藏 dotfile；无远端引用 / 失败时 tempPath 为 null，前端回退原路径）。
+ */
+export const localizeHtmlFile = (docPath: string) =>
+  invoke<{ tempPath: string | null; html: string; downloaded: number; skipped: number }>(
+    'localize_html_file',
+    { docPath }
+  )
+
+/** 文件指纹（size + mtime 类）：轮询比对磁盘变动，文件不存在返回 null */
+export const fileFingerprint = (path: string) =>
+  invoke<string | null>('file_fingerprint', { path })
+
 export const deletePath = (path: string) =>
   invoke<boolean>('delete_path', { path })
 

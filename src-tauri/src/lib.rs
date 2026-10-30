@@ -68,6 +68,9 @@ pub fn run() {
             supported_convert_targets,
             take_pending_opens,
             web_import::import_article_from_url,
+            web_import::assets::localize_md_html,
+            web_import::assets::localize_html_file,
+            web_import::assets::file_fingerprint,
         ])
         .build(tauri::generate_context!())
         .expect("error while building MdView")

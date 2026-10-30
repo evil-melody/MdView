@@ -11,25 +11,18 @@
 //!   标题上方，普通图文文档顶部会多出不属于正文的封面图——本模块封面图一律
 //!   不进正文，正文图保持原位置原顺序；仅「幻灯片多图」模板的 picture_page_info_list
 //!   图才是正文本体，按原顺序接在标题之后；
-//! - 图片本地化在 HTML 层改写 `src`，md / html 两种输出自然继承。
+//! - 资源本地化在 HTML 层改写引用（图片 + 附件），md / html 两种输出自然继承；
+//!   收集 / 下载 / 改写系列拆至 `assets` 子模块（本文件逼近 2000 行上限）。
 
+pub mod assets;
+
+use assets::{build_client, localize_images, sanitize_stem};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
-use crate::convert::text::{html_to_md, md_link_dest, HTML_DOC_CSS};
-
-/// 浏览器 UA：公众号对无 UA 的请求返回环境安全验证页，拿不到正文。
-const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
-(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
-/// 本地化图片上限：张数 / 总字节（超出则保留远程 URL）
-const MAX_IMAGES: usize = 60;
-const MAX_TOTAL_BYTES: usize = 20 * 1024 * 1024;
-
-/// 图片下载并发（分块 join_all，futures-util 已在依赖中）
-const DOWNLOAD_CONCURRENCY: usize = 4;
+use crate::convert::text::{html_to_md, HTML_DOC_CSS};
 
 /// 导入结果：产物路径 / 标题 / 本地化图片数。
 #[derive(Debug, Serialize)]
@@ -63,11 +56,7 @@ pub async fn import_article_from_url(
     }
 
     // ---- 抓取页面（浏览器 UA + 30s 总超时）----
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .user_agent(USER_AGENT)
-        .build()
-        .map_err(|e| format!("HTTP 客户端初始化失败: {}", e))?;
+    let client = build_client()?;
     let resp = client
         .get(&url)
         .send()
@@ -115,7 +104,7 @@ pub async fn import_article_from_url(
 
     // ---- 组装输出并落盘 ----
     let (ext, output) = if format == "html" {
-        ("html", build_html(&title, &content, &url))
+        ("html", build_html(&title, &content, &url, &dir, &stem))
     } else {
         ("md", build_md(&title, &content, &url))
     };
@@ -739,229 +728,6 @@ fn is_javascript_url(value: Option<&str>) -> bool {
         .starts_with("javascript:")
 }
 
-// ================================================================ 图片本地化
-
-/// 一条图片引用：HTML 中的原始字符串（用于原位替换）+ 规范化 URL（用于下载去重）。
-struct ImgRef {
-    raw: String,
-    url: String,
-}
-
-/// 收集正文 HTML 中的图片引用：跳过 data:/空 src/占位图，按 URL 去重保序。
-fn collect_image_refs(html: &str) -> Vec<ImgRef> {
-    let mut out: Vec<ImgRef> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut rest = html;
-    while let Some(start) = find_ci(rest, "<img") {
-        let Some(gt_rel) = find_tag_end(rest.as_bytes(), start)
-            .map(|i| i - start)
-            .or_else(|| rest[start..].find('>'))
-        else {
-            break;
-        };
-        let tag = &rest[start..start + gt_rel + 1];
-        rest = &rest[start + gt_rel + 1..];
-        let raw = attr_value(tag, "src").unwrap_or_default();
-        let raw = raw.trim().to_string();
-        if raw.is_empty() || raw.starts_with("data:") {
-            continue;
-        }
-        let url = normalize_image_url(&raw);
-        if url.is_empty() {
-            continue;
-        }
-        let path = url.split('?').next().unwrap_or(url.as_str());
-        if path.contains("pic_blank.gif")
-            || path.contains("pic_loading.gif")
-            || path.contains("pic_placeholder")
-        {
-            continue;
-        }
-        if seen.insert(url.clone()) {
-            out.push(ImgRef { raw, url });
-        }
-    }
-    out
-}
-
-/// 规范化图片 URL：`//` 补 `https:`，`http://` 升 `https://`；其余（相对路径等）
-/// 返回空串表示跳过本地化。
-fn normalize_image_url(raw: &str) -> String {
-    let u = decode_entities(raw).trim().to_string();
-    if u.starts_with("https://") {
-        u
-    } else if let Some(rest) = u.strip_prefix("http://") {
-        format!("https://{}", rest)
-    } else if u.starts_with("//") {
-        format!("https:{}", u)
-    } else {
-        String::new()
-    }
-}
-
-/// 扩展名判定：URL 路径扩展名 → content-type → 魔数；兜底 jpg；svg 保持 svg。
-fn detect_ext(url: &str, content_type: Option<&str>, bytes: &[u8]) -> String {
-    let path = url.split('?').next().unwrap_or(url);
-    if let Some(dot) = path.rfind('.') {
-        let ext = &path[dot + 1..];
-        if !ext.is_empty()
-            && ext.len() <= 5
-            && ext.bytes().all(|b| b.is_ascii_alphanumeric())
-        {
-            return ext.to_ascii_lowercase();
-        }
-    }
-    if let Some(ct) = content_type {
-        let ct = ct.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
-        let mapped = match ct.as_str() {
-            "image/png" => Some("png"),
-            "image/jpeg" | "image/jpg" => Some("jpg"),
-            "image/gif" => Some("gif"),
-            "image/webp" => Some("webp"),
-            "image/svg+xml" => Some("svg"),
-            "image/bmp" => Some("bmp"),
-            "image/x-icon" | "image/vnd.microsoft.icon" => Some("ico"),
-            _ => None,
-        };
-        if let Some(e) = mapped {
-            return e.to_string();
-        }
-    }
-    if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
-        return "png".to_string();
-    }
-    if bytes.starts_with(&[0x47, 0x49, 0x46, 0x38]) {
-        return "gif".to_string();
-    }
-    if bytes.starts_with(&[0x52, 0x49, 0x46, 0x46])
-        && bytes.len() >= 12
-        && bytes[8..12] == b"WEBP"[..]
-    {
-        return "webp".to_string();
-    }
-    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        return "jpg".to_string();
-    }
-    "jpg".to_string()
-}
-
-/// 下载单张图片：带 `Referer: <页面url>` + `Accept: image/*`（防盗链），单张 8s
-/// 超时。失败静默返回 None（调用方保留远程 URL）。
-async fn download_image(
-    client: &reqwest::Client,
-    page_url: &str,
-    img_url: &str,
-) -> Option<(Vec<u8>, String)> {
-    let resp = client
-        .get(img_url)
-        .header("Referer", page_url)
-        .header("Accept", "image/*")
-        .timeout(std::time::Duration::from_secs(8))
-        .send()
-        .await
-        .ok()?;
-    if !resp.status().is_success() {
-        return None;
-    }
-    // 单张不得超出总预算（content-length 预检，避免拉爆内存）
-    if let Some(len) = resp.content_length() {
-        if len > MAX_TOTAL_BYTES as u64 {
-            return None;
-        }
-    }
-    let content_type = resp
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-    let bytes = resp.bytes().await.ok()?;
-    if bytes.is_empty() {
-        return None;
-    }
-    let ext = detect_ext(img_url, content_type.as_deref(), &bytes);
-    Some((bytes.to_vec(), ext))
-}
-
-/// 图片本地化：下载正文图到 `<dir>/<stem>.assets/`，并把 HTML 里的 src 改写为
-/// 相对路径。上限 60 张 / 20MB，超出或失败保留远程 URL。assets 目录首张成功
-/// 下载才创建。返回 (改写后的 HTML, 本地化张数)。
-async fn localize_images(
-    client: &reqwest::Client,
-    page_url: &str,
-    html: &str,
-    stem: &str,
-    dir: &str,
-) -> (String, usize) {
-    let refs: Vec<ImgRef> = collect_image_refs(html)
-        .into_iter()
-        .take(MAX_IMAGES)
-        .collect();
-    if refs.is_empty() {
-        return (html.to_string(), 0);
-    }
-
-    // 分块并发下载；超预算即止，剩余保留远程 URL
-    let mut results: Vec<Option<(Vec<u8>, String)>> = Vec::with_capacity(refs.len());
-    let mut total = 0usize;
-    'outer: for chunk in refs.chunks(DOWNLOAD_CONCURRENCY) {
-        let outs = futures_util::future::join_all(
-            chunk
-                .iter()
-                .map(|r| download_image(client, page_url, &r.url)),
-        )
-        .await;
-        for o in outs {
-            match o {
-                Some((b, e)) if total + b.len() <= MAX_TOTAL_BYTES => {
-                    total += b.len();
-                    results.push(Some((b, e)));
-                }
-                Some(_) => {
-                    results.push(None);
-                    break 'outer;
-                }
-                None => results.push(None),
-            }
-        }
-    }
-    results.resize(refs.len(), None);
-
-    // 汇总可落盘项（首张成功才建 assets 目录）
-    let plan: Vec<(usize, Vec<u8>, String)> = results
-        .into_iter()
-        .enumerate()
-        .filter_map(|(i, r)| r.map(|(b, e)| (i, b, e)))
-        .collect();
-    if plan.is_empty() {
-        return (html.to_string(), 0);
-    }
-    let assets_dir = format!("{}/{}.assets", dir, stem);
-    if fs::create_dir_all(&assets_dir).is_err() {
-        return (html.to_string(), 0);
-    }
-
-    let mut replacements: Vec<(String, String)> = Vec::new();
-    for (i, bytes, ext) in plan {
-        let fname = format!("img-{:03}.{}", i + 1, ext);
-        if fs::write(format!("{}/{}", assets_dir, fname), &bytes).is_ok() {
-            replacements.push((refs[i].raw.clone(), format!("{}.assets/{}", stem, fname)));
-        }
-    }
-    if replacements.is_empty() {
-        return (html.to_string(), 0);
-    }
-
-    // 按原始串长度降序替换，防短串是长串子串造成错替
-    replacements.sort_by_key(|(raw, _)| std::cmp::Reverse(raw.len()));
-    let mut out = html.to_string();
-    let mut count = 0usize;
-    for (raw, rel) in &replacements {
-        out = out.replace(raw.as_str(), rel.as_str());
-        count += 1;
-    }
-    (out, count)
-}
-
 // ================================================================ HTML 净化
 
 /// HTML 输出前净化：剥 script/style/noscript 整块、HTML 注释、on* 事件属性、
@@ -1095,61 +861,21 @@ fn escape_html(s: &str) -> String {
 }
 
 /// 组装 HTML 输出：标题 + 净化后的正文 + 来源脚注，复用 HTML_DOC_CSS 排版。
-fn build_html(title: &str, body: &str, url: &str) -> String {
+///
+/// 本地化图片等附件保持【相对路径】引用（`<stem>.assets/…`，与落盘目录同名）：HTML 经
+/// 前端 `convertFileSrc` 加载后，iframe 以文档为 base 直接解析相对路径，无需再 absolutize
+/// 成 `asset://`。`dir` / `stem` 仅保留历史签名，当前不再参与改写。
+fn build_html(title: &str, body: &str, url: &str, _dir: &str, _stem: &str) -> String {
     let t = escape_html(title);
     let u = escape_html(url);
-    // 本地化图片路径含空格（标题作 stem 的 `.assets` 目录）时百分号编码：
-    // `asset://` 预览 webview 解析相对路径遇裸空格会截断 URL，图片不显示；
-    // 磁盘文件仍含空格（md 侧经 resolveLocalAssets 的 decodeURIComponent 还原），
-    // 故只编码 URL、不动文件，webview 请求 `foo%20bar.jpg` 时解码回真实路径。
-    let body = encode_local_asset_paths(&sanitize_html(body));
+    // 相对引用保持原样：`<stem>.assets/…` 由前端加载时按文档 base 解析
+    let body = sanitize_html(body);
     format!(
         "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>{}</title>\
 <style>{} img{{max-width:100%;height:auto;display:block;margin:16px auto;}}</style></head>\
 <body><h1>{}</h1>{}<p style=\"color:#888;font-size:13px\">来源：<a href=\"{}\">{}</a></p></body></html>",
         t, HTML_DOC_CSS, t, body, u, u
     )
-}
-
-/// HTML 输出里本地资源路径（`src=` / `href=`）百分号编码空格等特殊字符。
-///
-/// 仅重编码 URL —— 磁盘文件仍保留原始（含空格）路径，图片也已落盘；
-/// 复用 `md_link_dest`（远程 URL / 锚点 / data URI 含 scheme 时原样返回），
-/// 故防盗链 CDN 签名与 `#锚点` 不会被破坏，只有本地相对路径会被编码。
-fn encode_local_asset_paths(html: &str) -> String {
-    let mut out = String::with_capacity(html.len());
-    let mut rest = html;
-    'outer: loop {
-        // 取 rest 中最早的 `src="` 或 `href="`
-        let mut anchor: Option<(usize, usize)> = None;
-        for (name, len) in [("src", 3usize), ("href", 4usize)] {
-            let probe = format!("{}=\"", name);
-            if let Some(p) = rest.find(&probe) {
-                anchor = match anchor {
-                    Some((ap, _)) if ap <= p => anchor,
-                    _ => Some((p, len)),
-                };
-            }
-        }
-        let Some((pos, alen)) = anchor else {
-            break 'outer
-        };
-        // `pos` 指向 `src`/`href` 首字母，`alen` 为其长度；属性值起始 = pos+alen（`=`）再跳过引号。
-        let vstart = pos + alen + 2;
-        let Some(qc) = rest[vstart..].find('"') else {
-            out.push_str(&rest[pos..]);
-            break 'outer;
-        };
-        let vend = vstart + qc;
-        let value = &rest[vstart..vend];
-        out.push_str(&rest[..pos]);
-        out.push_str(&rest[pos..vstart]);
-        out.push_str(&md_link_dest(value));
-        out.push('"');
-        rest = &rest[vend + 1..];
-    }
-    out.push_str(rest);
-    out
 }
 
 /// 组装 Markdown 输出（html_to_md 内部已剥 script/style）。
@@ -1165,52 +891,18 @@ fn build_md(title: &str, body: &str, url: &str) -> String {
 
 // ================================================================ 文件名
 
-/// 文件名净化：保留字母数字（含中文）与 `. - _ 空格 · ： ， （ ） 【 】 、 。！？`，
-/// 先剥 `.md`/`.html` 后缀，截断 80 字符；空则返回空串由调用方兜底。
-fn sanitize_stem(raw: &str) -> String {
-    let mut s = raw.trim().to_string();
-    for ext in [".md", ".html"] {
-        if s.len() > ext.len() && s.to_lowercase().ends_with(ext) {
-            s.truncate(s.len() - ext.len());
-        }
-    }
-    let filtered: String = s
-        .chars()
-        .filter(|c| {
-            c.is_alphanumeric()
-                || matches!(
-                    c,
-                    '.' | '-'
-                        | '_'
-                        | ' '
-                        | '·'
-                        | '：'
-                        | '，'
-                        | '（'
-                        | '）'
-                        | '【'
-                        | '】'
-                        | '、'
-                        | '。'
-                        | '！'
-                        | '？'
-                )
-        })
-        .collect();
-    filtered
-        .trim()
-        .trim_matches('.')
-        .trim()
-        .chars()
-        .take(80)
-        .collect()
-}
-
 /// 文件名主干：用户输入优先，否则取网页标题净化；都空则兜底 imported-article。
+/// 净化走 assets 模块的 `sanitize_stem`（与本地化落盘目录名同源，保证 `<stem>.assets/`
+/// 目录名与 HTML 内引用一致）。
+/// 文件名优先级：用户显式指定（非空）> 网页标题 > 兜底。空名 / 纯符号名视为「未指定」，
+/// 回退到标题——避免 `sanitize_stem("")` 的 "doc" 兜底把文件名强行写成 doc。
 fn pick_stem(name: &str, title: &str) -> String {
-    let custom = sanitize_stem(name);
-    if !custom.is_empty() {
-        return custom;
+    let n = name.trim();
+    if !n.is_empty() {
+        let custom = sanitize_stem(n);
+        if !custom.is_empty() {
+            return custom;
+        }
     }
     let from_title = sanitize_stem(title);
     if !from_title.is_empty() {
@@ -1385,7 +1077,7 @@ mod tests {
     fn build_md_and_html_restore_lists_and_image_paths() {
         // 集成（自包含，无网络/无临时文件）：正文含 `<li><p>` 有序列表、带空格的
         // 本地化图片路径、以及 `<table>` 表格；build_md 应还原列表标记、补 GFM
-        // 表头分隔行、图片空格百分号编码；build_html 保留内联样式与图片 src（编码）、
+        // 表头分隔行、图片空格百分号编码；build_html 保留内联样式与图片 src（相对引用）、
         // 不残留会造成横向不换行的 nowrap。这三条正是真实导入链路保存产物所走的函数。
         let body = "<ol><li><p>问题一？</p></li><li><p>问题二？</p></li></ol>\
 <p><img src=\"标题 与 副标题.assets/img-001.jpg\" alt=\"图\"></p>\
@@ -1409,30 +1101,15 @@ mod tests {
         assert!(md.starts_with("# 测试标题"), "{md}");
         assert!(md.contains("> 来源: https://example.com/a"), "{md}");
 
-        let html = build_html("测试标题", body, url);
+        let html = build_html("测试标题", body, url, "/Users/tatsuma/Documents/本地知识库", "标题 与 副标题");
         assert!(html.contains("<h1>测试标题</h1>"), "{html}");
-        assert!(
-            html.contains("标题%20与%20副标题.assets/img-001.jpg"),
-            "HTML 本地图片路径空格应百分号编码: {html}"
-        );
-        assert!(!html.contains("标题 与 副标题.assets/img-001.jpg"), "{html}");
+        // HTML 本地图片保持相对路径引用（<stem>.assets/…），由前端按文档 base 解析，
+        // 不再 absolutize 成 asset:// 绝对 URL，也不对空格做百分号编码。
+        assert!(!html.contains("asset://localhost/"), "HTML 本地图片应为相对路径，而非 asset:// 绝对 URL: {html}");
+        assert!(html.contains(".assets/img-001.jpg"), "图片引用应保留: {html}");
+        assert!(html.contains("标题 与 副标题.assets/img-001.jpg"), "图片引用应为相对路径（保留原始中文/空格）: {html}");
+        assert!(!html.contains("%20"), "相对路径不应再对空格做百分号编码: {html}");
         assert!(!html.contains("white-space: nowrap"), "{html}");
-    }
-
-    #[test]
-    fn encode_local_asset_paths_codes_spaces_only_for_local() {
-        // HTML 中本地相对资源路径（含空格 stem 的 `.assets`）须百分号编码，
-        // 远程 URL / 锚点 / data URI 保持原样（不破坏防盗链签名与锚点）。
-        let html = "<img src=\"A B.assets/img-001.jpg\" alt=\"图\">\
-<img src=\"https://mmbiz.qpic.cn/AbCdEf/640\" alt=\"远\">\
-<a href=\"#top\">锚</a><img src=\"data:image/png;base64,AAAA\" alt=\"内联\">";
-        let out = encode_local_asset_paths(html);
-        assert!(out.contains("A%20B.assets/img-001.jpg"), "{out}");
-        assert!(out.contains("https://mmbiz.qpic.cn/AbCdEf/640"), "{out}");
-        assert!(out.contains("#top"), "{out}");
-        assert!(out.contains("data:image/png;base64,AAAA"), "{out}");
-        // 不含裸空格的路径
-        assert!(!out.contains("A B.assets"), "{out}");
     }
 
     // ---------------- JS 字符串解码 ----------------
@@ -1522,6 +1199,19 @@ mod tests {
     }
 
     #[test]
+    fn pick_stem_uses_title_when_name_empty() {
+        // 导入对话框留空时，文件名应取网页标题，而非 sanitize_stem("") 的 "doc" 兜底
+        assert_eq!(pick_stem("", "面试官如何做全链路资源隔离"), "面试官如何做全链路资源隔离");
+        assert_eq!(pick_stem("   ", "活动名称"), "活动名称");
+        // 用户显式指定名仍优先
+        assert_eq!(pick_stem("我的笔记", "网页标题"), "我的笔记");
+        // 名与标题皆空：sanitize_stem("") 兜底下落到 "doc"（总要有文件名）
+        assert_eq!(pick_stem("", ""), "doc");
+        // 纯符号名经 sanitize 兜底层为 "doc"（极端边界，非用户报告场景）
+        assert_eq!(pick_stem("###", "正文标题"), "doc");
+    }
+
+    #[test]
     fn extract_body_falls_back_chain() {
         let html = r#"<body><article><p>文章内容</p></article></body>"#;
         assert_eq!(extract_body(html, false).unwrap(), "<p>文章内容</p>");
@@ -1543,32 +1233,6 @@ mod tests {
         // 不残留 data-src
         assert!(!out.contains("data-src"));
         assert!(out.contains("keep.png"));
-    }
-
-    #[test]
-    fn attr_value_and_lazy_promotion_preserve_url_case() {
-        // 回归（QA 实测）：mmbiz CDN 大小写敏感，属性值曾被整体降小写 → 404 + 改写失配
-        let tag = r#"<img data-src="https://mmbiz.qpic.cn/sz_mmbiz_jpg/dHwlicgnJnmRy33uk2P3co0MDL3RlBFLli/640?wx_fmt=other&amp;from=appmsg" src="">"#;
-        assert_eq!(
-            attr_value(tag, "data-src").unwrap(),
-            "https://mmbiz.qpic.cn/sz_mmbiz_jpg/dHwlicgnJnmRy33uk2P3co0MDL3RlBFLli/640?wx_fmt=other&amp;from=appmsg"
-        );
-        // 空 src 不得被 data-src 里的 "src" 误命中
-        assert_eq!(attr_value(tag, "src").unwrap(), "");
-        let out = rewrite_lazy_images(tag);
-        assert!(out.contains("dHwlicgnJnmRy33uk2P3co0MDL3RlBFLli"), "{}", out);
-        assert!(!out.contains("dhwlicgnjnmry"), "{}", out);
-        // raw / url 同源保持大小写（raw 是原位改写目标）
-        let refs = collect_image_refs(&out);
-        assert_eq!(refs.len(), 1);
-        assert_eq!(
-            refs[0].url,
-            "https://mmbiz.qpic.cn/sz_mmbiz_jpg/dHwlicgnJnmRy33uk2P3co0MDL3RlBFLli/640?wx_fmt=other&from=appmsg"
-        );
-        assert_eq!(
-            refs[0].raw,
-            "https://mmbiz.qpic.cn/sz_mmbiz_jpg/dHwlicgnJnmRy33uk2P3co0MDL3RlBFLli/640?wx_fmt=other&amp;from=appmsg"
-        );
     }
 
     #[test]
@@ -1622,65 +1286,26 @@ mod tests {
         assert!(out.contains("<p>t</p>"), "{}", out);
     }
 
-    // ---------------- 图片 URL 与魔数 ----------------
-
-    #[test]
-    fn normalize_image_url_rules() {
-        assert_eq!(
-            normalize_image_url("//mmbiz.qpic.cn/a.png"),
-            "https://mmbiz.qpic.cn/a.png"
-        );
-        assert_eq!(
-            normalize_image_url("http://mmbiz.qpic.cn/a.png"),
-            "https://mmbiz.qpic.cn/a.png"
-        );
-        assert_eq!(normalize_image_url("https://x/a.png"), "https://x/a.png");
-        assert_eq!(normalize_image_url("/relative/a.png"), "");
-        assert_eq!(normalize_image_url("data:image/png;base64,xx"), "");
-    }
-
-    #[test]
-    fn detect_ext_prefers_url_then_content_type_then_magic() {
-        assert_eq!(detect_ext("https://x.dev/a/b.png?x=1", None, &[]), "png");
-        assert_eq!(
-            detect_ext("https://x.dev/640", Some("image/webp"), &[]),
-            "webp"
-        );
-        let png = [0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-        assert_eq!(detect_ext("https://x.dev/mmbiz/640", None, &png), "png");
-        assert_eq!(
-            detect_ext("https://x.dev/x", None, &[0xFF, 0xD8, 0xFF, 0xE0]),
-            "jpg"
-        );
-        let webp = [
-            0x52, 0x49, 0x46, 0x46, 1, 2, 3, 4, 0x57, 0x45, 0x42, 0x50,
-        ];
-        assert_eq!(detect_ext("https://x.dev/x", None, &webp), "webp");
-        // 兜底 jpg
-        assert_eq!(detect_ext("https://x.dev/x", None, &[1, 2, 3]), "jpg");
-    }
-
-    #[test]
-    fn collect_image_refs_dedups_and_skips_placeholders() {
-        let html = r#"<img src="https://a.dev/1.png"><img src="https://a.dev/1.png"><img src="https://a.dev/pic_blank.gif"><img src="data:image/png;base64,xx"><img><img src="//b.dev/2.png">"#;
-        let refs = collect_image_refs(html);
-        assert_eq!(refs.len(), 2);
-        assert_eq!(refs[0].url, "https://a.dev/1.png");
-        assert_eq!(refs[1].url, "https://b.dev/2.png");
-    }
-
     // ---------------- 文件名 ----------------
 
     #[test]
     fn sanitize_stem_keeps_cjk_and_strips_illegal() {
-        assert_eq!(sanitize_stem("报告/最终:版？"), "报告最终版？");
+        // 与 assets.rs 同源的 ASCII 安全 slug（亦用于文件名主干 pick_stem 与本地化落盘
+        // stem，保证 `<stem>.assets/` 目录名与 HTML 引用一致）：保留中文与字母数字；
+        // 空格 / 连字符转下划线；其余特殊符号（含 . : / ？ 等）去除；折叠连续下划线 +
+        // trim；为空则回退 "doc"。
+        assert_eq!(sanitize_stem("报告/最终:版？"), "报告最终版");
         assert_eq!(sanitize_stem("a<b>c|d"), "abcd");
-        assert_eq!(sanitize_stem("readme.md"), "readme");
-        assert_eq!(sanitize_stem("page.html"), "page");
-        assert_eq!(sanitize_stem("  "), "");
-        assert_eq!(sanitize_stem("..."), "");
+        assert_eq!(sanitize_stem("readme.md"), "readmemd");
+        assert_eq!(sanitize_stem("page.html"), "pagehtml");
+        // 空格 / 连字符转下划线并折叠连续下划线
+        assert_eq!(sanitize_stem("my  file--name"), "my_file_name");
+        // 空白 / 纯特殊符号 → 空 → 回退 "doc"
+        assert_eq!(sanitize_stem("  "), "doc");
+        assert_eq!(sanitize_stem("..."), "doc");
+        // 中文目录名不再截断
         let long: String = "长".repeat(100);
-        assert_eq!(sanitize_stem(&long).chars().count(), 80);
+        assert_eq!(sanitize_stem(&long), long);
     }
 
     #[test]
@@ -1720,7 +1345,7 @@ mod tests {
         assert!(md.starts_with("# 文章标题"), "{}", md);
         assert!(md.contains("第一段"));
         assert!(!md.contains(cover), "封面图不得出现在正文: {}", md);
-        let html_out = build_html(&title, &body, "https://mp.weixin.qq.com/s/abc");
+        let html_out = build_html(&title, &body, "https://mp.weixin.qq.com/s/abc", "", "");
         assert!(!html_out.contains(cover), "封面图不得出现在 HTML: {}", html_out);
     }
 
@@ -1786,7 +1411,7 @@ mod tests {
         let content = rewrite_lazy_images(&body);
         let md = build_md(&title, &content, "https://mp.weixin.qq.com/s/x");
         assert!(md.contains(url_mixed), "{}", md);
-        let html_out = build_html(&title, &content, "https://mp.weixin.qq.com/s/x");
+        let html_out = build_html(&title, &content, "https://mp.weixin.qq.com/s/x", "", "");
         assert!(html_out.contains(url_mixed), "{}", html_out);
     }
 
@@ -1801,7 +1426,7 @@ mod tests {
 
     #[test]
     fn html_output_structure() {
-        let html = build_html("标题", "<p>正文</p>", "https://x.dev/a");
+        let html = build_html("标题", "<p>正文</p>", "https://x.dev/a", "", "");
         assert!(html.starts_with("<!doctype html>"), "{}", html);
         assert!(html.contains("<title>标题</title>"), "{}", html);
         assert!(html.contains("<h1>标题</h1>"), "{}", html);
@@ -1812,7 +1437,7 @@ mod tests {
             html
         );
         // 标题/URL 进 HTML 前转义
-        let escaped = build_html("a<b&c", "<p>x</p>", "https://x.dev/a?b=1&c=2");
+        let escaped = build_html("a<b&c", "<p>x</p>", "https://x.dev/a?b=1&c=2", "", "");
         assert!(escaped.contains("<title>a&lt;b&amp;c</title>"), "{}", escaped);
         assert!(
             escaped.contains("href=\"https://x.dev/a?b=1&amp;c=2\""),
