@@ -62,7 +62,8 @@ const sidebarCollapsed = ref(false)
 const sidebarWidth = ref(252)
 const pendingDelete = ref<FileEntry | null>(null)
 const deleting = ref(false)
-const pendingClosePath = ref<string | null>(null)
+/** 待确认的关闭集合：单个关闭也按长度 1 的数组处理，批量共用同一确认弹窗 */
+const pendingClosePaths = ref<string[]>([])
 const theme = ref<'dark' | 'light'>(
   (localStorage.getItem('mdview-theme') as 'dark' | 'light') || 'dark'
 )
@@ -975,12 +976,18 @@ function switchTab(path: string) {
 }
 
 function requestCloseTab(path: string) {
-  const t = state.tabs.find((x) => x.entry.path === path)
-  if (t?.dirty) {
-    pendingClosePath.value = path
+  requestCloseTabs([path])
+}
+
+/** 右键菜单批量关闭：只要有一个脏页签就整体确认一次，不逐个弹窗 */
+function requestCloseTabs(paths: string[]) {
+  if (!paths.length) return
+  const hasDirty = paths.some((p) => state.tabs.find((x) => x.entry.path === p)?.dirty)
+  if (hasDirty) {
+    pendingClosePaths.value = paths
     return
   }
-  doCloseTab(path)
+  doCloseTabs(paths)
 }
 
 function doCloseTab(path: string) {
@@ -992,16 +999,24 @@ function doCloseTab(path: string) {
     state.activeTabPath = next ? next.entry.path : null
     state.selected = next ? next.entry : null
   }
-  pendingClosePath.value = null
+}
+
+function doCloseTabs(paths: string[]) {
+  for (const p of paths) doCloseTab(p)
+  pendingClosePaths.value = []
 }
 
 function confirmCloseTab() {
-  if (pendingClosePath.value) doCloseTab(pendingClosePath.value)
+  doCloseTabs(pendingClosePaths.value)
 }
 
-const pendingCloseName = computed(() => {
-  const t = state.tabs.find((x) => x.entry.path === pendingClosePath.value)
-  return t?.entry.name || ''
+const pendingCloseMsg = computed(() => {
+  const ps = pendingClosePaths.value
+  if (ps.length === 1) {
+    const name = state.tabs.find((x) => x.entry.path === ps[0])?.entry.name || ''
+    return `「${name}」有未保存的修改，关闭后将丢失。确定关闭吗？`
+  }
+  return `选中的 ${ps.length} 个页签中有未保存的修改，关闭后将丢失。确定关闭吗？`
 })
 
 function closeDoc() {
@@ -1044,6 +1059,11 @@ async function saveCurrent() {
     t.externalChanged = false
     // 保存即写入：同步指纹，避免轮询把刚保存的文件误判为外部变更又刷新一遍
     void updateFingerprint(t)
+    // html/htm：源码已写盘，重建本地化内容并递增 rev，切回预览时 iframe 强制重载
+    if (ext === 'html' || ext === 'htm') {
+      await localizeTabHtml(t)
+      t.htmlRev = (t.htmlRev ?? 0) + 1
+    }
     // office 保存后重建富预览（后端 docx HTML / SheetJS / pptx 懒加载），使预览态与磁盘一致
     if (officeEditable(t.entry) && t.viewer) {
       t.viewer = await buildViewer(t.entry)
@@ -1058,6 +1078,13 @@ async function saveCurrent() {
 
 async function writeTextNoted(t: OpenTab) {
   await writeText(t.entry.path, t.content)
+}
+
+/** 编辑 → 预览切换：自增 rev 让 HTML iframe 重新挂载；不重读磁盘，避免覆盖未保存内容 */
+function refreshHtmlPreview() {
+  const t = activeTab.value
+  if (!t || !['html', 'htm'].includes((t.entry.ext || '').toLowerCase())) return
+  t.htmlRev = (t.htmlRev ?? 0) + 1
 }
 
 /** office 原生编辑器内容变更 → 标脏 */
@@ -1443,6 +1470,8 @@ onMounted(init)
             :edit-on-open="justCreatedPath"
             @switch-tab="switchTab"
             @close-tab="requestCloseTab"
+            @close-tabs="requestCloseTabs"
+            @refresh-html="refreshHtmlPreview"
             @save="saveCurrent"
             @save-as="saveAsCurrent"
             @convert="onConvertFromPane"
@@ -1531,13 +1560,13 @@ onMounted(init)
     />
 
     <ConfirmDialog
-      v-if="pendingClosePath"
+      v-if="pendingClosePaths.length"
       title="关闭页签"
-      :message="`「${pendingCloseName}」有未保存的修改，关闭后将丢失。确定关闭吗？`"
+      :message="pendingCloseMsg"
       :danger="true"
       confirm-text="丢弃并关闭"
       @confirm="confirmCloseTab"
-      @cancel="pendingClosePath = null"
+      @cancel="pendingClosePaths = []"
     />
 
     <ConfirmDialog

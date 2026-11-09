@@ -166,7 +166,7 @@ function focusSearch(e: MouseEvent) {
       <FileTree
         class="kb-tree"
         :roots="state.config.scan_roots"
-        :active-path="state.currentDir"
+        :active-path="state.activeTabPath || state.currentDir"
         :filter="state.searchQuery"
         @open-file="(e) => emit('open-entry', e)"
         @open-dir="(e) => emit('open-entry', e)"

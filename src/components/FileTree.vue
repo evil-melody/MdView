@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, provide, ref, watch } from 'vue'
+import { computed, nextTick, provide, ref, watch } from 'vue'
 import { scanDirectory } from '../api'
 import { state } from '../store'
 import type { FileEntry } from '../types'
@@ -220,10 +220,51 @@ const filteredRoots = computed<TreeNode[] | null>(() => {
 
 const filterActive = computed(() => !!debouncedFilter.value.trim())
 const filterTotal = computed(() => (debouncedFilter.value.trim() ? filterMatchCount.value : 0))
+
+// ── 激活页签 → 左树选中可见 ──────────────────────────────
+// 树是懒加载的：文件在折叠目录下时高亮节点根本不存在，需逐级展开并滚到可见。
+const treeRef = ref<HTMLElement | null>(null)
+const norm = (p: string) => p.replace(/\\/g, '/')
+
+async function revealActive(path: string) {
+  const root = rootNodes.value.find((n) => norm(path).startsWith(norm(n.entry.path).replace(/\/$/, '') + '/'))
+  if (!root) return
+  root.expanded = true
+  await loadChildren(root)
+  const base = norm(root.entry.path).replace(/\/$/, '')
+  const segs = norm(path).slice(base.length).split('/').filter(Boolean)
+  let cur = root
+  let acc = base
+  for (let i = 0; i < segs.length - 1; i++) {
+    acc += '/' + segs[i]
+    let next = cur.children.find((c) => norm(c.entry.path) === acc)
+    if (!next) {
+      await loadChildren(cur)
+      next = cur.children.find((c) => norm(c.entry.path) === acc)
+    }
+    if (!next || !next.entry.is_dir) return
+    next.expanded = true
+    await loadChildren(next)
+    cur = next
+  }
+  await nextTick()
+  treeRef.value?.querySelector('.ft-row.active')?.scrollIntoView({ block: 'nearest' })
+}
+
+watch(
+  () => props.activePath,
+  async (p) => {
+    if (!p || filterActive.value) return
+    await nextTick()
+    if (treeRef.value?.querySelector('.ft-row.active')) return
+    await revealActive(p)
+  },
+  { immediate: true }
+)
 </script>
 
 <template>
-  <div class="ftree scrollable">
+  <div ref="treeRef" class="ftree scrollable">
     <!-- 过滤视图：搜索词非空时用索引命中结果替代懒加载树 -->
     <template v-if="filterActive">
       <div class="ft-filter-head">

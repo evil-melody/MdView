@@ -9,10 +9,11 @@ import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap } 
 import { tags as t } from '@lezer/highlight'
 import { languageFor, languageLabel } from '../utils/codeLang'
 
-const props = defineProps<{ content: string; path: string }>()
+const props = defineProps<{ content: string; path: string; formattable?: boolean }>()
 const emit = defineEmits<{
   (e: 'change'): void
   (e: 'update:content', v: string): void
+  (e: 'format'): void
 }>()
 
 const hostRef = ref<HTMLDivElement | null>(null)
@@ -85,6 +86,8 @@ function children() {
       indentWithTab,
     ]),
     languageFor(ext.value),
+    // 导入的 HTML 常有超长行：软换行避免横向滚动，语义不受影响
+    ...(ext.value === 'html' || ext.value === 'htm' ? [EditorView.lineWrapping] : []),
     EditorView.updateListener.of((u) => {
       if (!u.docChanged) return
       if (timer) clearTimeout(timer)
@@ -150,6 +153,7 @@ defineExpose({ getValue })
     <div class="cde-bar">
       <span class="cde-lang">{{ label }}</span>
       <span class="cde-hint">Tab 缩进 · Ctrl/Cmd+F 查找 · Esc 退出</span>
+      <button v-if="formattable" class="cde-format" title="重新排版 HTML 源码（保存后才会写盘）" @click="emit('format')">格式化</button>
       <span class="cde-stat">{{ stat.lines }} 行 · {{ stat.chars }} 字符</span>
     </div>
     <div v-if="bootErr" class="cde-err">{{ bootErr }}</div>

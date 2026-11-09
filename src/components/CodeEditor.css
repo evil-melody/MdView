@@ -31,6 +31,21 @@
   color: #6b6b76;
 }
 
+.cde-format {
+  padding: 2px 10px;
+  border: 1px solid #3a3a45;
+  border-radius: 5px;
+  background: transparent;
+  color: #b9b9c4;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cde-format:hover {
+  border-color: #6ea8fe;
+  color: #6ea8fe;
+}
+
 .cde-stat {
   color: #6b6b76;
   font-variant-numeric: tabular-nums;

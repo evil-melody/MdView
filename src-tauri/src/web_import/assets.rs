@@ -204,7 +204,7 @@ fn join_url(base: &str, rel: &str) -> Option<String> {
 /// - `https://` 原样；`http://` / `//` 升 https（与图片链路同规则）
 /// - `data:` / `javascript:` / `mailto:` / `tel:` 等 → None（跳过）
 /// - 相对 URL → base join；base=None 表示只收绝对地址（本地文档场景）
-fn normalize_resource_url(raw: &str, base: Option<&str>) -> Option<String> {
+pub(crate) fn normalize_resource_url(raw: &str, base: Option<&str>) -> Option<String> {
     let decoded = decode_entities(raw);
     let u = decoded.trim().split('#').next().unwrap_or(&decoded).trim();
     if u.is_empty() {
@@ -242,7 +242,7 @@ fn normalize_resource_url(raw: &str, base: Option<&str>) -> Option<String> {
 }
 
 /// URL 路径中的「干净」扩展名（query 不算；≤5 位字母数字），否则 None。
-fn url_ext(url: &str) -> Option<String> {
+pub(crate) fn url_ext(url: &str) -> Option<String> {
     let path = url.split('?').next().unwrap_or(url);
     let dot = path.rfind('.')?;
     let ext = &path[dot + 1..];
@@ -336,7 +336,7 @@ fn detect_ext(url: &str, content_type: Option<&str>, bytes: &[u8]) -> String {
 /// 单请求 8s 超时；content-length 预检 + 读后复核双保险，单文件超
 /// MAX_ATTACHMENT_BYTES 返回 None。失败静默返回 None（调用方保留远程 URL）。
 /// 返回 (字节, 扩展名)。
-async fn download_resource(
+pub(crate) async fn download_resource(
     client: &reqwest::Client,
     page_url: Option<&str>,
     url: &str,
@@ -696,7 +696,7 @@ fn find_ci(haystack: &str, needle: &str) -> Option<usize> {
 // DOM 做 Ctrl+F 查找高亮。
 
 /// 可被内联的资源扩展名 → MIME（仅这些会读盘内联；其余本地引用原样保留）。
-fn mime_for_ext(ext: &str) -> Option<&'static str> {
+pub(crate) fn mime_for_ext(ext: &str) -> Option<&'static str> {
     let m = match ext.to_ascii_lowercase().as_str() {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
@@ -892,9 +892,14 @@ pub async fn localize_html_file(doc_path: String) -> Result<LocalizeFileResult, 
     let client = build_client()?;
     let outcome = localize_html_core(&client, &html, &dir, &stem, None).await;
     let downloaded = outcome.images + outcome.attachments;
+    // 微信视频号 iframe → 播放块（必须在 data: 内联之前：内联的封面已就位，落盘的相对
+    // mp4 交给下一步 embed_resources_as_data_uri 读盘内联；且此时 iframe 已消失，
+    // collect_resource_refs 也不会把 `<video>` 的相对引用再当成远端附件去下载）
+    let with_videos =
+        super::video::localize_wechat_videos(&client, &outcome.html, &dir, &stem, None).await;
     // 远程资源已下载到本地（相对引用）；再把【全部本地引用】内联为 data: URI，
     // 经前端 srcdoc 同源渲染即可显示（不依赖 asset://，绕开 WebView 不支持 file:// 的限制）
-    let mut localized = embed_resources_as_data_uri(&outcome.html, &dir).0;
+    let mut localized = embed_resources_as_data_uri(&with_videos, &dir).0;
     // 注入保存桥接（Ctrl/Cmd+S → postMessage 父窗口），同源 srcdoc iframe 也能保存
     localized = inject_save_bridge(&localized);
     let path = Path::new(&dir).join(format!("{}.localized.html", stem));

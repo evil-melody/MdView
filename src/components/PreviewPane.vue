@@ -12,8 +12,9 @@ import CodeEditor from './CodeEditor.vue'
 import FileIcon from './FileIcon.vue'
 import { viewerTypeFor, officeEditable } from '../utils/viewer'
 import { isCodeFile } from '../utils/codeLang'
+import { formatHtml, isMinifiedHtml } from '../utils/htmlFormat'
 import { clipboardImageBlob, saveClipboardImage } from '../utils/pasteImage'
-import { createDomFind, iframeFindCss, IFRAME_FIND_STYLE_ID } from '../utils/domFind'
+import { createDomFind, iframeFindCss, iframeVideoCss, IFRAME_FIND_STYLE_ID } from '../utils/domFind'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import type { TabViewer } from '../store'
 
@@ -41,6 +42,10 @@ const emit = defineEmits<{
   (e: 'close'): void
   (e: 'switch-tab', path: string): void
   (e: 'close-tab', path: string): void
+  /** 批量关闭（右键菜单：关闭其他 / 关闭右侧 / 全部关闭） */
+  (e: 'close-tabs', paths: string[]): void
+  /** 从编辑切回预览时重载 HTML iframe（不重读磁盘，避免未保存改动被覆盖） */
+  (e: 'refresh-html'): void
   (e: 'open-ai'): void
   (e: 'dirty'): void
   (e: 'image-saved'): void
@@ -134,10 +139,28 @@ const htmlSrc = computed(() => {
   return activeTabObj.value?.htmlSrc ?? convertFileSrc(props.entry.path)
 })
 
+/** 每个文件只自动格式化一次：压缩 HTML 首次进编辑时排版，避免反复标脏 */
+const htmlFormatted = new Set<string>()
+
+function formatHtmlDoc() {
+  emit('update:content', formatHtml(props.content))
+}
+
 function selectTab(t: ViewTab) {
   if (t !== 'mindmap' && !canEdit.value && t !== 'preview') return
+  // HTML 编辑 → 预览：重载 iframe 一次，保证刚保存的源码立刻反映到预览
+  if (t === 'preview' && tab.value === 'edit' && isHtml.value) emit('refresh-html')
   tab.value = t
 }
+
+// 导入的 HTML 常是单行压缩源码：进编辑时用块级换行/缩进排版，行内节点保持原样
+watch([tab, () => props.entry?.path], () => {
+  const p = props.entry?.path
+  if (tab.value !== 'edit' || !isHtml.value || !p || htmlFormatted.has(p)) return
+  htmlFormatted.add(p)
+  if (!isMinifiedHtml(props.content)) return
+  nextTick(() => emit('update:content', formatHtml(props.content)))
+})
 
 const showOutline = computed(
   () => !!props.entry && props.headings.length > 0 && tab.value !== 'mindmap'
@@ -446,6 +469,7 @@ function bindPreviewScroll() {
 }
 
 function onWindowKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && tabMenu.value) tabMenu.value = null
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
     // 无可用查找面（HTML iframe / CodeEditor 自带）时交给各自处理，不抢键
     if (findSurface() === 'none') return
@@ -461,7 +485,7 @@ function onWindowKeydown(e: KeyboardEvent) {
  *  iframe 聚焦时按键被其吃掉、父 window 的 keydown 收不到，故必须在 iframe 的 window 上补监听。
  *  不依赖 Rust 内联的桥接脚本（srcdoc 文档若因 CSP / 脚本被剥离而未执行，内联桥接即失效），
  *  跨域注入抛错时才由 onBridgeMessage 兜底。
- *  同时注入查找高亮样式：父窗口 CSS 不跨文档生效，iframe 内的 <mark> 需自带样式。 */
+ *  同时注入 iframe 自身文档需要的样式：父窗口 CSS 不跨文档生效（查找高亮 + 视频号播放块）。 */
 function onHtmlFrameLoad() {
   const f = htmlFrame.value
   if (!f) return
@@ -473,8 +497,19 @@ function onHtmlFrameLoad() {
       const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#4c8dff'
       const st = d.createElement('style')
       st.id = IFRAME_FIND_STYLE_ID
-      st.textContent = iframeFindCss(accent)
+      st.textContent = iframeFindCss(accent) + iframeVideoCss()
       d.head.appendChild(st)
+    }
+    // 超过 Rust 内联上限（12MB）的视频仍是相对路径：srcdoc 文档没有可用的 base URL，
+    // 逐个按当前文档所在目录改写成 asset 绝对地址，浏览器才会真的发起请求。
+    const baseDir = props.entry?.path.replace(/[/\\][^/\\]*$/, '') ?? ''
+    if (d && baseDir) {
+      for (const v of Array.from(d.querySelectorAll<HTMLVideoElement>('video.mdview-video'))) {
+        const s = v.getAttribute('src') ?? ''
+        if (s && !/^(?:[a-z][a-z0-9+.-]*:|\/\/|\/)/i.test(s)) {
+          v.setAttribute('src', convertFileSrc(`${baseDir}/${s}`))
+        }
+      }
     }
     w.addEventListener('keydown', (ev: KeyboardEvent) => {
       if (!(ev.ctrlKey || ev.metaKey)) return
@@ -524,13 +559,92 @@ watch(tab, () => {
   }
 })
 
+// ── 页签条：横向滚动（无原生滚动条）+ VSCode 风格右键菜单 ──────────────
+const stripRef = ref<HTMLElement | null>(null)
+const overflow = ref({ left: false, right: false })
+const tabMenu = ref<{ path: string; x: number; y: number } | null>(null)
+let stripObserver: ResizeObserver | null = null
+
+function updateOverflow() {
+  const el = stripRef.value
+  if (!el) return
+  overflow.value = {
+    left: el.scrollLeft > 1,
+    right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1
+  }
+}
+
+/** 激活页签滚到可见区：手动算 scrollLeft，避免 scrollIntoView 带动整个页面 */
+function scrollActiveIntoView() {
+  const el = stripRef.value
+  const active = el?.querySelector<HTMLElement>('.ts-tab.active')
+  if (!el || !active) return
+  const l = active.offsetLeft
+  const r = l + active.offsetWidth
+  if (l < el.scrollLeft) el.scrollLeft = Math.max(0, l - 12)
+  else if (r > el.scrollLeft + el.clientWidth) el.scrollLeft = r - el.clientWidth + 12
+  updateOverflow()
+}
+
+function onStripWheel(e: WheelEvent) {
+  const el = stripRef.value
+  if (!el || el.scrollWidth <= el.clientWidth) return
+  const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
+  if (!delta) return
+  e.preventDefault()
+  el.scrollLeft += delta
+  updateOverflow()
+}
+
+const tabMenuItems = computed(() => {
+  const m = tabMenu.value
+  if (!m || !props.tabs?.length) return []
+  const paths = props.tabs.map((t) => t.entry.path)
+  const i = Math.max(0, paths.indexOf(m.path))
+  const p = m.path
+  return [
+    { label: '关闭', danger: false, sep: false, run: () => emit('close-tab', p) },
+    { label: '关闭其他', danger: false, sep: false, run: () => emit('close-tabs', paths.filter((x) => x !== p)) },
+    { label: '关闭右侧', danger: false, sep: false, run: () => emit('close-tabs', paths.slice(i + 1)) },
+    { label: '全部关闭', danger: true, sep: true, run: () => emit('close-tabs', paths) }
+  ]
+})
+
+function openTabMenu(ev: MouseEvent, path: string) {
+  tabMenu.value = {
+    path,
+    x: Math.min(ev.clientX, window.innerWidth - 198),
+    y: Math.min(ev.clientY, window.innerHeight - 158)
+  }
+}
+
+watch([() => props.activeTabPath, () => props.tabs?.length], () => {
+  nextTick(() => {
+    updateOverflow()
+    scrollActiveIntoView()
+  })
+})
+
 onMounted(() => {
   window.addEventListener('keydown', onWindowKeydown)
   window.addEventListener('message', onBridgeMessage)
+  if (stripRef.value) {
+    stripObserver = new ResizeObserver(() => {
+      updateOverflow()
+      scrollActiveIntoView()
+    })
+    stripObserver.observe(stripRef.value)
+  }
+  nextTick(() => {
+    updateOverflow()
+    scrollActiveIntoView()
+  })
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onWindowKeydown)
   window.removeEventListener('message', onBridgeMessage)
+  stripObserver?.disconnect()
+  stripObserver = null
   if (boundPreviewEl) {
     boundPreviewEl.removeEventListener('scroll', onPreviewScroll)
     boundPreviewEl = null
@@ -542,21 +656,27 @@ defineExpose({ exportOffice, commitPptx })
 
 <template>
   <div class="pane">
-    <div v-if="tabs && tabs.length" class="tabstrip">
-      <div
-        v-for="t in tabs"
-        :key="t.entry.path"
-        class="ts-tab"
-        :class="{ active: t.entry.path === activeTabPath }"
-        :title="t.entry.path"
-        @click="emit('switch-tab', t.entry.path)"
-      >
-        <span class="ts-ico"><FileIcon :name="t.entry.name" :is-dir="t.entry.is_dir" :size="14" /></span>
-        <span class="ts-name">{{ t.entry.name }}</span>
-        <span v-if="t.dirty" class="ts-dot" title="未保存">●</span>
-        <span v-else-if="t.externalChanged" class="ts-dot ts-dot-warn" title="文件已在外部修改，刷新后同步">●</span>
-        <button class="ts-close" title="关闭页签" @click.stop="emit('close-tab', t.entry.path)">×</button>
+    <div v-if="tabs && tabs.length" class="tabstrip-wrap">
+      <div ref="stripRef" class="tabstrip" @scroll="updateOverflow" @wheel="onStripWheel">
+        <div
+          v-for="t in tabs"
+          :key="t.entry.path"
+          class="ts-tab"
+          :class="{ active: t.entry.path === activeTabPath }"
+          :title="t.entry.path"
+          @click="emit('switch-tab', t.entry.path)"
+          @contextmenu.prevent="openTabMenu($event, t.entry.path)"
+        >
+          <span class="ts-ico"><FileIcon :name="t.entry.name" :is-dir="t.entry.is_dir" :size="14" /></span>
+          <span class="ts-name">{{ t.entry.name }}</span>
+          <span v-if="t.dirty" class="ts-dot" title="未保存">●</span>
+          <span v-else-if="t.externalChanged" class="ts-dot ts-dot-warn" title="文件已在外部修改，刷新后同步">●</span>
+          <button class="ts-close" title="关闭页签" @click.stop="emit('close-tab', t.entry.path)">×</button>
+        </div>
       </div>
+      <!-- 淡出遮罩：只提示「还能往这边滚」，不显示原生滚动条 -->
+      <div class="ts-fade left" :class="{ show: overflow.left }"></div>
+      <div class="ts-fade right" :class="{ show: overflow.right }"></div>
     </div>
     <div class="pane-head">
       <div class="file-info">
@@ -660,6 +780,7 @@ defineExpose({ exportOffice, commitPptx })
               v-else-if="isHtml && htmlContent"
               ref="htmlFrame"
               class="html-frame"
+              :key="`srcdoc-${activeTabObj?.htmlRev ?? 0}`"
               :srcdoc="htmlContent"
               :title="entry?.name || 'HTML 预览'"
               @load="onHtmlFrameLoad"
@@ -668,6 +789,7 @@ defineExpose({ exportOffice, commitPptx })
               v-else-if="isHtml"
               ref="htmlFrame"
               class="html-frame"
+              :key="`src-${activeTabObj?.htmlRev ?? 0}`"
               :src="htmlSrc"
               :title="entry?.name || 'HTML 预览'"
               @load="onHtmlFrameLoad"
@@ -761,27 +883,17 @@ defineExpose({ exportOffice, commitPptx })
               @update:content="(v: string) => emit('update:content', v)"
             />
           </div>
+          <!-- html/htm：CodeMirror HTML 模式（语法高亮 + 行号 + 查找替换 + 格式化） -->
           <div v-else-if="tab === 'edit' && isHtml" class="flex1">
-            <textarea
-              ref="editorEl"
-              class="editor scrollable full"
-              :value="content"
-              @input="emit('update:content', ($event.target as HTMLTextAreaElement).value)"
-              spellcheck="false"
-            ></textarea>
-            <div v-if="findOpen" class="find-bar">
-              <input ref="findInputEl" class="find-input" :value="findQuery" placeholder="查找"
-                @input="onFindInput" @keydown.enter.prevent="findNext" @keydown.shift.enter.prevent="findPrev" />
-              <input class="find-input" v-model="findReplace" placeholder="替换为"
-                @keydown.enter.prevent="findNext" @keydown.shift.enter.prevent="findPrev" />
-              <button class="find-btn" title="上一个 (Shift+Enter)" @click="findPrev">↑</button>
-              <button class="find-btn" title="下一个 (Enter)" @click="findNext">↓</button>
-              <button class="find-btn" title="替换当前" @click="replaceCurrent">替换</button>
-              <button class="find-btn" title="替换全部" @click="replaceAll">全部</button>
-              <label class="find-case"><input type="checkbox" v-model="findCase" @change="() => recomputeMatches()" />区分大小写</label>
-              <span class="find-count">{{ findCount ? (findCur + 1) + ' / ' + findCount : '0 / 0' }}</span>
-              <button class="find-close" title="关闭 (Esc)" @click="closeFind">×</button>
-            </div>
+            <CodeEditor
+              :key="entry!.path"
+              :content="content"
+              :path="entry!.path"
+              formattable
+              @change="emit('dirty')"
+              @update:content="(v: string) => emit('update:content', v)"
+              @format="formatHtmlDoc"
+            />
           </div>
           <div v-else-if="tab === 'edit'" class="editor-split">
             <textarea
@@ -856,6 +968,25 @@ defineExpose({ exportOffice, commitPptx })
         <div class="nf-emoji">🗂</div>
         <p v-if="entry">所选类型（{{ kindLabel[entry.kind] }}）暂不支持预览，可在外部程序中打开。</p>
         <p v-else>从左侧选择 Markdown / 文本 / 代码文件开始预览与编辑。</p>
+      </div>
+    </div>
+
+    <!-- 页签右键菜单：复用 App.css 的全局 ctx-* 样式 -->
+    <div
+      v-if="tabMenu"
+      class="ctx-overlay"
+      @click="tabMenu = null"
+      @contextmenu.prevent="tabMenu = null"
+    >
+      <div class="ctx-menu" :style="{ left: tabMenu.x + 'px', top: tabMenu.y + 'px' }">
+        <template v-for="it in tabMenuItems" :key="it.label">
+          <div v-if="it.sep" class="ts-menu-sep"></div>
+          <button
+            class="ctx-item"
+            :class="{ danger: it.danger }"
+            @click.stop="it.run(); tabMenu = null"
+          >{{ it.label }}</button>
+        </template>
       </div>
     </div>
   </div>

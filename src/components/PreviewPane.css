@@ -446,7 +446,13 @@
   margin: 0;
 }
 
-/* 页签条：胶囊式页签 */
+/* 页签条：胶囊式页签。外层负责淡出遮罩，内层负责滚动 */
+.tabstrip-wrap {
+  position: relative;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
 .tabstrip {
   display: flex;
   align-items: center;
@@ -456,13 +462,48 @@
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
   scrollbar-width: none;
+  position: relative;
 }
 
 .tabstrip::-webkit-scrollbar {
   display: none;
 }
 
+/* 只提示「还能往这边滚」，不显示原生滚动条 */
+.ts-fade {
+  position: absolute;
+  top: 0;
+  bottom: 1px;
+  width: 34px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s;
+  z-index: 1;
+}
+
+.ts-fade.show {
+  opacity: 1;
+}
+
+.ts-fade.left {
+  left: 0;
+  background: linear-gradient(to right, var(--panel), transparent);
+}
+
+.ts-fade.right {
+  right: 0;
+  background: linear-gradient(to left, var(--panel), transparent);
+}
+
+.ts-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
 .ts-tab {
+  /* 不收缩：页签过多时产生溢出，overflow-x 才会生效 */
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 6px;

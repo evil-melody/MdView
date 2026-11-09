@@ -7,6 +7,7 @@ import { json } from '@codemirror/lang-json'
 import { yaml } from '@codemirror/lang-yaml'
 import { markdown } from '@codemirror/lang-markdown'
 import { xml } from '@codemirror/lang-xml'
+import { html } from '@codemirror/lang-html'
 import { python } from '@codemirror/lang-python'
 import { sql } from '@codemirror/lang-sql'
 import { StreamLanguage } from '@codemirror/language'
@@ -32,6 +33,7 @@ export const CODE_EXTS = [
 const LANG_LABELS: Record<string, string> = {
   sh: 'Shell', bash: 'Shell', zsh: 'Shell', ksh: 'Shell', fish: 'Shell', csh: 'Shell',
   toml: 'TOML',
+  html: 'HTML', htm: 'HTML',
   xml: 'XML', xsd: 'XML', xsl: 'XML', xslt: 'XSLT', dtd: 'DTD', plist: 'plist',
   json: 'JSON', jsonc: 'JSON', json5: 'JSON',
   yaml: 'YAML', yml: 'YAML',
@@ -72,6 +74,9 @@ function langFor(ext: string): Extension {
     case 'markdown':
     case 'mdx':
       return markdown()
+    case 'html':
+    case 'htm':
+      return html()
     case 'xml':
     case 'xsd':
     case 'xsl':

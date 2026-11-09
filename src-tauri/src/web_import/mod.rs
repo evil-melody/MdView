@@ -12,9 +12,11 @@
 //!   不进正文，正文图保持原位置原顺序；仅「幻灯片多图」模板的 picture_page_info_list
 //!   图才是正文本体，按原顺序接在标题之后；
 //! - 资源本地化在 HTML 层改写引用（图片 + 附件），md / html 两种输出自然继承；
-//!   收集 / 下载 / 改写系列拆至 `assets` 子模块（本文件逼近 2000 行上限）。
+//!   收集 / 下载 / 改写系列拆至 `assets` 子模块（本文件逼近 2000 行上限）；
+//!   微信视频号 iframe 本地化拆至 `video` 子模块（复用 assets 的下载与 URL 规范化）。
 
 pub mod assets;
+pub mod video;
 
 use assets::{build_client, localize_images, sanitize_stem};
 use serde::Serialize;

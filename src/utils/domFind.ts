@@ -27,6 +27,21 @@ export function iframeFindCss(accent: string): string {
   )
 }
 
+/** srcdoc iframe 内微信视频号播放块样式。
+ *  ⚠️ 本串与 src/styles/video.css 手工同步（同一套规则，压缩成一行）：
+ *  HTML 预览在独立文档里渲染，父窗口样式表不跨文档生效，只能复制一份注入。
+ *  变量全部带兜底值——iframe 文档没有 App 的 :root 自定义属性。 */
+export function iframeVideoCss(): string {
+  return (
+    '.mdview-video{max-width:100%;display:block;margin:1em auto;border-radius:var(--radius-sm,8px);background:#000}' +
+    '.mdview-video-fallback{display:flex;flex-direction:column;align-items:center;gap:.5em;max-width:100%;margin:1em auto;padding:.75em;border:1px solid var(--border-2,#cfd3df);border-radius:var(--radius,12px);background:var(--panel-2,#24242e)}' +
+    '.mdview-video-poster{max-width:100%;border-radius:var(--radius-sm,8px)}' +
+    '.mdview-video-link{color:var(--accent,#6a48f0);font-weight:600;text-decoration:none}' +
+    '.mdview-video-link:hover{color:var(--accent-2,#7c5cff);text-decoration:underline}' +
+    '.mdview-video-hint{color:var(--text-3,#9a9dab);font-size:.85em}'
+  )
+}
+
 export function createDomFind(getRoot: () => HTMLElement | null): DomFindHandle {
   let marks: HTMLElement[] = []
   let index = -1

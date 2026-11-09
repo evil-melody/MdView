@@ -1,0 +1,48 @@
+/* 微信视频号本地化播放块（Rust 侧 web_import/video.rs 生成的标记）。
+ *
+ * ⚠️ 需与 src/utils/domFind.ts 的 `iframeVideoCss()` 手工同步：HTML 预览在 `srcdoc`
+ * iframe 内渲染，父窗口样式表不跨文档生效，iframe 里那份只能复制同一段规则。
+ * 颜色一律走 App 已有 CSS 变量，并带兜底值（iframe 文档没有 App 的 :root 变量）。
+ */
+
+.mdview-video {
+  max-width: 100%;
+  display: block;
+  margin: 1em auto;
+  border-radius: var(--radius-sm, 8px);
+  background: #000;
+}
+
+.mdview-video-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5em;
+  max-width: 100%;
+  margin: 1em auto;
+  padding: 0.75em;
+  border: 1px solid var(--border-2, #cfd3df);
+  border-radius: var(--radius, 12px);
+  background: var(--panel-2, #24242e);
+}
+
+.mdview-video-poster {
+  max-width: 100%;
+  border-radius: var(--radius-sm, 8px);
+}
+
+.mdview-video-link {
+  color: var(--accent, #6a48f0);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.mdview-video-link:hover {
+  color: var(--accent-2, #7c5cff);
+  text-decoration: underline;
+}
+
+.mdview-video-hint {
+  color: var(--text-3, #9a9dab);
+  font-size: 0.85em;
+}
