@@ -28,6 +28,14 @@ export interface OpenTab {
   htmlSrc?: string
   /** html 重载序号：本地化 / 刷新时自增，绑定到 iframe :key 强制重渲染 */
   htmlRev?: number
+  /** Office 引擎重载序号：刷新 / 外部变更时自增，驱动常驻实例重读磁盘并 update(src) */
+  officeRev?: number
+  /** PDF 重载序号：刷新 / 外部变更时自增，驱动常驻实例重读磁盘并重新渲染 */
+  pdfRev?: number
+  /** 超大文本：流式只读预览，正文不进 content，避免 5MB+ 字符串反复复制 */
+  stream?: boolean
+  /** 流式重载序号：刷新 / 外部变更时自增，驱动编辑器从头重读 */
+  streamRev?: number
   /** 文件已在外部修改、但页签有未保存内容：页签打标点，刷新 / 保存后清除 */
   externalChanged?: boolean
 }

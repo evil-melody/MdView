@@ -1,0 +1,260 @@
+/* 原生 OOXML 特性可视化（chart / 条件格式 / 数据验证 / 切片器 / 对话框）。
+   静态样式集中于此；动态几何一律走 :style 绑定。 */
+
+/* 条件格式层：z-index 1，与 .ov-cell 同级且 DOM 在其后 → 压在单元格底色上；
+   低于选区 overlay（.ov-range-tint z-index 2），绝不盖选区。 */
+.ov-feat-cond { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+.ov-feat-ov { position: absolute; pointer-events: none; }
+.ov-feat-tint { opacity: 0.55; }
+.ov-feat-bar { opacity: 0.42; border-radius: 1px; }
+
+/* 可视化对象层：chart / slicer / 验证下拉，z-index 4（压过选区底纹，但低于选区外框 8） */
+.ov-feat-vis { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+
+.ov-feat-chart {
+  position: absolute;
+  box-sizing: border-box;
+  background: #fff;
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 3px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+  pointer-events: auto;
+}
+.ov-feat-chart-svg, .ov-feat-chart-svg svg { width: 100%; height: 100%; display: block; }
+.ov-feat-refresh {
+  position: absolute;
+  right: 3px;
+  top: 3px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 4px;
+  background: var(--panel, #fff);
+  color: var(--text-2, #555);
+  font-size: 13px;
+  line-height: 18px;
+  cursor: pointer;
+  opacity: 0.55;
+}
+.ov-feat-chart:hover .ov-feat-refresh { opacity: 1; }
+.ov-feat-refresh:hover { border-color: var(--accent, #5b6ee1); color: var(--accent-2, #3d4fb8); }
+
+.ov-feat-slicer {
+  position: absolute;
+  box-sizing: border-box;
+  padding: 6px;
+  background: var(--panel, #fff);
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  pointer-events: auto;
+}
+.ov-feat-slicer-head {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2, #555);
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border, #e5e5e5);
+}
+.ov-feat-slicer-items { display: flex; flex-wrap: wrap; gap: 4px; }
+.ov-feat-slicer-btn {
+  flex: 1 1 auto;
+  min-width: 44px;
+  padding: 3px 8px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 4px;
+  background: var(--panel-3, #f6f6f6);
+  color: var(--text, #222);
+  font-size: 11px;
+  cursor: pointer;
+}
+.ov-feat-slicer-btn:hover { border-color: var(--accent, #5b6ee1); }
+.ov-feat-slicer-on { background: var(--accent, #5b6ee1); border-color: var(--accent, #5b6ee1); color: #fff; font-weight: 600; }
+
+.ov-feat-val-trigger {
+  position: absolute;
+  width: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent-soft, #eef1ff);
+  color: var(--accent-2, #3d4fb8);
+  font-size: 10px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.ov-feat-val-trigger:hover { background: var(--accent, #5b6ee1); color: #fff; }
+.ov-feat-val-back { position: fixed; inset: 0; z-index: 9600; }
+.ov-feat-val-pop {
+  position: fixed;
+  z-index: 9601;
+  min-width: 120px;
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--panel, #fff);
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+.ov-feat-val-prompt { padding: 4px 8px; font-size: 10px; color: var(--muted, #999); border-bottom: 1px solid var(--border, #eee); margin-bottom: 2px; }
+.ov-feat-val-item {
+  text-align: left;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text, #222);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ov-feat-val-item:hover { background: var(--accent-soft, #eef1ff); color: var(--accent-2, #3d4fb8); }
+
+/* 对话框内的规则清单 / 表单（复用 .ov-dlg-* / .ov-dd-* / .ov-flt-input） */
+.ov-feat-rules { display: flex; flex-direction: column; gap: 4px; max-height: 130px; overflow-y: auto; border: 1px solid var(--border, #e5e5e5); border-radius: 6px; padding: 4px; }
+.ov-feat-rule { display: flex; align-items: center; gap: 6px; padding: 3px 6px; background: var(--panel-3, #f7f7f7); border-radius: 4px; }
+.ov-feat-rule-t { flex: 1 1 auto; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-feat-x { flex: none; width: 18px; height: 18px; padding: 0; border: 0; background: transparent; color: var(--text-2, #888); font-size: 11px; cursor: pointer; border-radius: 3px; }
+.ov-feat-x:hover { background: var(--accent-soft, #eef1ff); color: #c0392b; }
+.ov-feat-empty { color: var(--muted, #999); font-size: 11px; text-align: center; padding: 6px; }
+.ov-feat-inline { display: flex; gap: 6px; }
+.ov-feat-inline .ov-flt-input { flex: 1 1 0; }
+.ov-feat-swatches { display: flex; gap: 5px; flex-wrap: wrap; }
+.ov-feat-swatch { width: 22px; height: 22px; padding: 0; border: 2px solid transparent; border-radius: 4px; cursor: pointer; }
+.ov-feat-swatch-on { border-color: var(--accent, #5b6ee1); box-shadow: 0 0 0 1px var(--panel, #fff) inset; }
+.ov-feat-add {
+  padding: 7px 10px;
+  border: 1px dashed var(--border, #bbb);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent-2, #3d4fb8);
+  font-size: 11px;
+  cursor: pointer;
+}
+.ov-feat-add:hover { border-color: var(--accent, #5b6ee1); background: var(--accent-soft, #eef1ff); }
+.ov-feat-note { color: var(--muted, #999); font-size: 11px; line-height: 1.6; }
+
+/* 自动填充选项浮标（拖拽填充完成后选区右下角）+ 重算菜单 */
+.ov-autofill-wrap { position: absolute; z-index: 6; }
+.ov-autofill-btn {
+  width: 14px; height: 14px; padding: 0;
+  border: 1px solid var(--border, #bbb);
+  border-radius: 2px;
+  background: var(--panel, #fff);
+  color: var(--text-2, #666);
+  font-size: 9px; line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+}
+.ov-autofill-btn:hover { background: var(--accent-soft, #eef1ff); color: var(--accent-2, #3d4fb8); }
+.ov-autofill-menu {
+  position: absolute;
+  right: 0;
+  bottom: 16px;
+  min-width: 132px;
+  padding: 3px;
+  background: var(--panel, #fff);
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  display: flex; flex-direction: column;
+}
+.ov-autofill-item {
+  text-align: left;
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text, #222);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ov-autofill-item:hover { background: var(--accent-soft, #eef1ff); color: var(--accent-2, #3d4fb8); }
+
+/* 序列对话框的自绘单选（圆点式，仿 Office） */
+.ov-radios { display: flex; gap: 12px; flex-wrap: wrap; }
+.ov-radios-col { flex-direction: column; gap: 6px; }
+.ov-radio {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 2px 4px;
+  border: 0; background: transparent;
+  color: var(--text, #222);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ov-radio:disabled { color: var(--muted, #aaa); cursor: default; }
+.ov-radio-dot {
+  width: 13px; height: 13px;
+  border: 1px solid var(--border-2, #999);
+  border-radius: 50%;
+  background: var(--panel, #fff);
+  position: relative;
+  flex: none;
+}
+.ov-radio-on .ov-radio-dot { border-color: var(--accent, #5b6ee1); }
+.ov-radio-on .ov-radio-dot::after {
+  content: '';
+  position: absolute; inset: 2.5px;
+  border-radius: 50%;
+  background: var(--accent, #5b6ee1);
+}
+.ov-dlg-row-off { opacity: 0.45; }
+
+/* 序列对话框：自绘可编辑块（contenteditable，替代原生 input） */
+.ov-series-edit { min-height: 28px; cursor: text; white-space: pre-wrap; word-break: break-all; }
+.ov-series-edit:empty::before { content: attr(data-placeholder); color: var(--muted, #999); }
+
+/* ---- Excel ribbon 第七批：视图类开关（标尺 / 视图模式 / 追踪箭头）----
+   开关状态放在 .ov-sheet / .ov-grid 的行内 CSS 变量上（Vue 不接管这些变量，
+   单元格重绘后依然有效），用属性选择器命中。 */
+.ov-sheet[style*="--ov-ruler-on"]::before {
+  content: '';
+  display: block;
+  flex: 0 0 14px;
+  border-bottom: 1px solid var(--border);
+  background:
+    repeating-linear-gradient(90deg, var(--border-2) 0 1px, transparent 1px 24px) top / 100% 6px no-repeat,
+    repeating-linear-gradient(90deg, var(--border) 0 1px, transparent 1px 6px) top / 100% 10px no-repeat;
+  opacity: 0.75;
+}
+
+/* 分页预览 / 页面布局：按纸张宽度画出分页参考线 */
+.ov-sheet[style*="--ov-mode-pagebreak"] .ov-grid,
+.ov-sheet[style*="--ov-mode-pagelayout"] .ov-grid {
+  background-image: repeating-linear-gradient(90deg, var(--border-2) 0 1px, transparent 1px 720px);
+}
+.ov-sheet[style*="--ov-mode-pagelayout"] .ov-grid {
+  background-image: repeating-linear-gradient(90deg, var(--border-2) 0 1px, transparent 1px 720px),
+    repeating-linear-gradient(0deg, var(--border-2) 0 1px, transparent 1px 960px);
+}
+
+/* 拆分窗格：拆分线（双线），位置由 --ov-split-x / --ov-split-y 给出 */
+.ov-grid[style*="--ov-split-x"]::after {
+  content: '';
+  position: absolute;
+  left: var(--ov-split-x);
+  top: var(--ov-split-y);
+  width: 4px;
+  height: 100%;
+  border-left: 1px solid var(--text-3);
+  border-right: 1px solid var(--text-3);
+  background: transparent;
+  pointer-events: none;
+  z-index: 6;
+}
+
+/* 追踪引用 / 追踪从属：高亮被引用的单元格 */
+.ov-cell.ov-trace {
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+}
+.ov-cell.ov-trace-hit {
+  outline: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: -1px;
+}

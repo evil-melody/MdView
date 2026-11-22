@@ -75,3 +75,21 @@
 .cde-host .cm-editor.cm-focused {
   outline: none !important;
 }
+
+.cde-progress {
+  flex: 0 0 120px;
+  height: 6px;
+  border: 0;
+  border-radius: 3px;
+  background: #2a2a33;
+  accent-color: #6ea8fe;
+}
+
+.cde-stream-err {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  border-bottom: 1px solid #4a2b31;
+  background: rgba(255, 83, 112, 0.08);
+  color: #ffc9c9;
+  font-size: 12px;
+}

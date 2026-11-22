@@ -1,0 +1,139 @@
+/* PDF 编辑器：工具条对齐 Office Ribbon 视觉，颜色全部走 MdView 主题变量 */
+.pe-root {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  background: var(--panel-2);
+  outline: none;
+}
+
+.pe-bar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  overflow-x: auto;
+  scrollbar-width: none;
+  user-select: none;
+}
+
+.pe-bar::-webkit-scrollbar { display: none; }
+
+.pe-group {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  padding-right: 8px;
+  border-right: 1px solid var(--border);
+}
+
+.pe-btn {
+  height: 26px;
+  min-width: 26px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.pe-btn:hover:not(:disabled) { background: var(--panel-3); color: var(--text); border-color: var(--border); }
+.pe-btn:disabled { opacity: 0.42; cursor: default; }
+.pe-wide { min-width: 62px; }
+.pe-page-no, .pe-zoom { min-width: 52px; text-align: center; color: var(--text-2); font-size: 11px; }
+.pe-state { margin-left: auto; padding-left: 12px; color: var(--text-3); font-size: 11px; white-space: nowrap; }
+.pe-state-ro { color: var(--warn, #e8a13c); }
+
+.pe-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 18px;
+  overflow: auto;
+  text-align: center;
+  background: var(--panel-3);
+}
+
+.pe-page {
+  position: relative;
+  display: inline-block;
+  box-shadow: 0 3px 18px rgb(0 0 0 / 22%);
+  background: #fff;
+}
+
+.pe-canvas { display: block; }
+
+.pe-overlay {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+}
+
+.pe-hit { fill: transparent; stroke: transparent; stroke-width: 1; cursor: text; }
+.pe-hit:hover { fill: rgb(90 169 255 / 16%); stroke: rgb(90 169 255 / 70%); }
+.pe-cover { fill: #fff; }
+.pe-newtext { pointer-events: none; }
+.pe-image { cursor: move; }
+.pe-image-on { outline: none; }
+.pe-sel { fill: none; stroke: #2f7de1; stroke-width: 2; stroke-dasharray: 5 3; pointer-events: none; }
+.pe-handle { fill: #2f7de1; stroke: #fff; stroke-width: 1; cursor: nwse-resize; }
+
+.pe-assets {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.pe-assets::-webkit-scrollbar { display: none; }
+
+.pe-assets-title { color: var(--text-3); font-size: 11px; white-space: nowrap; }
+.pe-asset { display: flex; align-items: center; gap: 4px; }
+.pe-thumb { width: 42px; height: 42px; object-fit: contain; border: 1px solid var(--border); border-radius: 3px; background: #fff; }
+
+.pe-edit {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.pe-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 13px;
+  resize: vertical;
+}
+
+.pe-err {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, #c00000 12%, var(--panel));
+  color: var(--text);
+  font-size: 11px;
+}

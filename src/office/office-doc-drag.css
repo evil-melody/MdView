@@ -1,0 +1,212 @@
+/* Word 文档区拖动交互的静态样式：表格列宽手柄 + 图片选中框/8 手柄。
+   动态定位（选中框的 left/top/width/height）由 OfficeDocView.vue 的 :style 绑定注入。 */
+
+/* ---- 表格列宽拖动：每个单元格右边界的细手柄 ---- */
+.ov-doc-root .de-tbl td { position: relative; }
+.ov-doc-root .de-col-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -3px;
+  width: 7px;
+  z-index: 3;
+  cursor: col-resize;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.ov-doc-root .de-col-grip::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  top: 0;
+  bottom: 0;
+}
+.ov-doc-root .de-col-grip:hover::after { background: rgba(26, 115, 232, 0.35); }
+
+/* ---- 表格行高拖动：每行第一个单元格下边界的细手柄 ---- */
+.ov-doc-root .de-row-grip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -3px;
+  height: 7px;
+  z-index: 3;
+  cursor: row-resize;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.ov-doc-root .de-row-grip::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 0;
+  right: 0;
+}
+.ov-doc-root .de-row-grip:hover::after { background: rgba(26, 115, 232, 0.35); }
+
+/* ---- 图片选中框与 8 个缩放手柄 ---- */
+.ov-doc-root .de-img-overlay {
+  position: absolute;
+  box-sizing: border-box;
+  outline: 1px solid #1a73e8;
+  pointer-events: none;
+  z-index: 40;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.ov-doc-root .de-img-handle {
+  position: absolute;
+  box-sizing: border-box;
+  width: 9px;
+  height: 9px;
+  background: #fff;
+  border: 1px solid #1a73e8;
+  border-radius: 1px;
+  pointer-events: auto;
+}
+.ov-doc-root .de-img-handle[data-dir='nw'] { left: -5px; top: -5px; cursor: nwse-resize; }
+.ov-doc-root .de-img-handle[data-dir='n']  { left: 50%; top: -5px; margin-left: -5px; cursor: ns-resize; }
+.ov-doc-root .de-img-handle[data-dir='ne'] { right: -5px; top: -5px; cursor: nesw-resize; }
+.ov-doc-root .de-img-handle[data-dir='e']  { right: -5px; top: 50%; margin-top: -5px; cursor: ew-resize; }
+.ov-doc-root .de-img-handle[data-dir='se'] { right: -5px; bottom: -5px; cursor: nwse-resize; }
+.ov-doc-root .de-img-handle[data-dir='s']  { left: 50%; bottom: -5px; margin-left: -5px; cursor: ns-resize; }
+.ov-doc-root .de-img-handle[data-dir='sw'] { left: -5px; bottom: -5px; cursor: nesw-resize; }
+.ov-doc-root .de-img-handle[data-dir='w']  { left: -5px; top: 50%; margin-top: -5px; cursor: ew-resize; }
+
+/* ---- 图片旋转手柄：选框顶部居中，连线指向框顶；随选框旋转 ---- */
+.ov-doc-root .de-img-rot {
+  position: absolute;
+  left: 50%;
+  top: -36px;
+  margin-left: -7px;
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  background: #fff;
+  border: 1.5px solid #1a73e8;
+  border-radius: 50%;
+  pointer-events: auto;
+  cursor: grab;
+  z-index: 1;
+}
+.ov-doc-root .de-img-rot::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 13px;
+  width: 1px;
+  height: 22px;
+  margin-left: -0.5px;
+  background: #1a73e8;
+}
+.ov-doc-root .de-img-rot:active { cursor: grabbing; }
+
+/* ---- 浮动图片（真实 wp:anchor）：绕排由动态 float/shape-outside，层叠由此 ---- */
+.ov-doc-root .de-page-inner { position: relative; z-index: 0; }
+.ov-doc-root .de-float { display: inline-block; }
+.ov-doc-root .de-float-behindDoc { z-index: -1; }
+.ov-doc-root .de-float-inFrontOfText { z-index: 6; }
+/* 续页重复的表头行只读、不参与列宽/行高拖动 */
+.ov-doc-root .de-tbl tr.de-repeat { opacity: 0.98; }
+
+/* ---- 自绘环绕菜单（禁原生 select/checkbox/radio） ---- */
+.ov-doc-root .ov-wrap-menu {
+  position: absolute;
+  z-index: 50;
+  box-sizing: border-box;
+  width: 178px;
+  padding: 8px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 12px;
+  color: #24292f;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.ov-doc-root .ov-wrap-title { margin: 8px 0 4px; color: #6e7781; font-size: 11px; }
+.ov-doc-root .ov-wrap-title:first-child { margin-top: 0; }
+.ov-doc-root .ov-wrap-row { display: flex; flex-wrap: wrap; gap: 4px; }
+.ov-doc-root .ov-wrap-btn {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  background: #f6f8fa;
+  color: #24292f;
+  font: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.ov-doc-root .ov-wrap-btn:hover { background: #eaeef2; }
+.ov-doc-root .ov-wrap-btn.ov-wrap-on { background: #1a73e8; border-color: #1a73e8; color: #fff; }
+
+/* ---- 页眉页脚：每页边距区渲染（定位由 DocxMeta 注入），双击进入编辑态 ---- */
+.ov-page .de-hf {
+  position: absolute;
+  /* 盖过同层的 de-page-inner（DOM 靠后者优先），否则双击命中不到页眉区域 */
+  z-index: 2;
+  min-height: 12pt;
+}
+.ov-page .de-hf:hover { outline: 1px dashed rgba(26, 115, 232, 0.45); outline-offset: 3px; }
+.ov-page .de-hf-view .de-p { white-space: pre-wrap; }
+.ov-page .de-hf-edit {
+  outline: 1px solid #1a73e8;
+  outline-offset: 3px;
+  min-height: 12pt;
+  background: rgba(26, 115, 232, 0.04);
+}
+.ov-page .de-hf-text { white-space: pre-wrap; min-height: 1em; outline: none; }
+
+/* ---- 图片裁剪（a:srcRect）：裁剪壳定外框尺寸，内部图片按裁剪比例放大并偏移 ---- */
+.ov-doc-root .de-crop { display: inline-block; overflow: hidden; position: relative; vertical-align: bottom; }
+.ov-doc-root .de-crop img { max-width: none; }
+/* 裁剪态手柄：四边中点，拖动改 srcRect，双击该侧复位（overlay 为 pointer-events:none，必须显式打开） */
+.ov-doc-root .de-img-crop {
+  position: absolute;
+  pointer-events: auto;
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  background: #fff;
+  border: 1.5px dashed #1a73e8;
+  border-radius: 2px;
+  z-index: 1;
+}
+.ov-doc-root .de-img-crop[data-side="l"] { left: -8px; top: 50%; margin-top: -8px; cursor: ew-resize; }
+.ov-doc-root .de-img-crop[data-side="r"] { right: -8px; top: 50%; margin-top: -8px; cursor: ew-resize; }
+.ov-doc-root .de-img-crop[data-side="t"] { top: -8px; left: 50%; margin-left: -8px; cursor: ns-resize; }
+.ov-doc-root .de-img-crop[data-side="b"] { bottom: -8px; left: 50%; margin-left: -8px; cursor: ns-resize; }
+
+/* ---- 分栏正文（sectPr w:cols）：块不跨栏拆分，栏数/栏距由 pageInnerStyle 注入 ---- */
+.ov-doc-root .de-cols .de-block { break-inside: avoid; }
+/* 栏命中色带：点击时按 column-count/gap 几何算出命中栏，绝对定位覆盖该栏（在正文之下、不吃点击） */
+.ov-doc-root .de-col-hit {
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+  background: rgba(26, 115, 232, 0.06);
+  box-shadow: inset 1px 0 rgba(26, 115, 232, 0.22), inset -1px 0 rgba(26, 115, 232, 0.22);
+}
+
+/* ---- run 级格式修订（w:rPrChange）：作者色左侧竖线走内联动态值，这里只放静态形状 ---- */
+.ov-doc-root .de-fmt-chg {
+  position: relative;
+  cursor: help;
+}
+.ov-doc-root .de-fmt-chg:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+/* ---- 段落级格式修订（w:pPrChange）：作者色左侧竖线走内联动态值，这里只放静态形状 ---- */
+.ov-doc-root .de-ppr-chg {
+  position: relative;
+  cursor: help;
+}
+.ov-doc-root .de-ppr-chg:hover {
+  background: rgba(0, 0, 0, 0.04);
+}

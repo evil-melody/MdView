@@ -21,7 +21,8 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
-  flex: 1;
+  flex: 1 1 0;
+  overflow: hidden;
 }
 
 .back-btn {
@@ -33,7 +34,10 @@
   font-size: 15px;
 }
 
+/* flex item 默认 min-width:auto 会撑破父容器，长文件名把预览/编辑按钮挤出可视区 */
 .fname {
+  flex: 1 1 auto;
+  min-width: 0;
   font-weight: 600;
   font-size: 14px;
   overflow: hidden;
@@ -42,14 +46,17 @@
 }
 
 .ftag {
+  flex: 0 0 auto;
   font-size: 11px;
   color: var(--accent);
   background: var(--accent-soft);
   padding: 1px 7px;
   border-radius: 4px;
+  white-space: nowrap;
 }
 
 .dirty-dot {
+  flex: 0 0 auto;
   color: var(--green);
   font-size: 10px;
 }
@@ -61,6 +68,7 @@
 
 .tabs {
   display: flex;
+  flex: 0 0 auto;
   gap: 4px;
   background: var(--panel-2);
   padding: 3px;
@@ -89,8 +97,9 @@
 .head-actions {
   display: flex;
   gap: 8px;
-  flex-shrink: 0;
+  flex: 0 0 auto;
 }
+.head-actions .btn { white-space: nowrap; }
 
 /* 刷新按钮：与同排文字按钮等高，仅图标 */
 .refresh-btn {
@@ -319,6 +328,8 @@
   tab-size: 4;
 }
 
+.code-view.wrap { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+
 .flex1 {
   flex: 1;
   min-width: 0;
@@ -372,7 +383,27 @@
   background: var(--code-bg);
   color: var(--text);
   tab-size: 2;
+  overflow-wrap: anywhere;
 }
+
+/* 右键菜单关闭自动换行后，所有文本渲染面统一回到不换行 + 横向滚动 */
+.pane-body.no-wrap .editor,
+.pane-body.no-wrap .code-view,
+.pane-body.no-wrap .md-body p,
+.pane-body.no-wrap .md-body li,
+.pane-body.no-wrap .md-body pre,
+.pane-body.no-wrap .de-p,
+.pane-body.no-wrap .ov-slide-para,
+.pane-body.no-wrap .bs-body td,
+.pane-body.no-wrap .pe-input {
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+/* 打开时，表格单元格与 PDF 文本输入框也跟随换行 */
+.pane-body .bs-body td,
+.pane-body .pe-input { white-space: pre-wrap; word-break: break-word; }
 
 .editor-live {
   overflow: hidden;

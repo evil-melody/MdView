@@ -78,9 +78,17 @@ export const readDocxUniver = (path: string) =>
 export const readFileBytes = (path: string): Promise<ArrayBuffer> =>
   invoke<ArrayBuffer>('read_file_as_bytes', { path })
 
+/** 超大文本流式预览：按字节区间读原始字节，前端 TextDecoder(stream) 跨块拼 UTF-8 */
+export const readFileRange = (path: string, offset: number, length: number): Promise<ArrayBuffer> =>
+  invoke<ArrayBuffer>('read_file_range', { path, offset, length })
+
 /** 写入文件原始字节（与 readFileBytes 对称，走原始字节通道）。 */
 export const writeFileBytes = (path: string, contents: Uint8Array): Promise<boolean> =>
   invoke<boolean>('write_file_bytes', { path, contents })
+
+/** 原生图片转码为 PNG（浏览器解不了的格式：macOS 截图 TIFF 等）。失败返回 null。 */
+export const transcodeImage = (contents: Uint8Array): Promise<ArrayBuffer | null> =>
+  invoke<ArrayBuffer>('transcode_image', { contents }).catch(() => null)
 
 /** office 原生编辑保存：前端组件导出的二进制（docx/xlsx）base64 落盘 */
 export const writeBinaryBase64 = (path: string, contents: string) =>

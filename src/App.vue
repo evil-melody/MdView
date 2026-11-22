@@ -5,7 +5,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { state, bumpTree, type OpenTab } from './store'
 import { resolveProfile } from './ai'
-import { loadConfig, saveConfig, scanDirectory, indexRoot, deletePath, renamePath, searchFiles, readText, writeText, readOfficeMd, writeOfficeMd, writeBinaryBase64, aiChatStream, summarizeFiles, loadSummaries, clearSummaries, removeImageRecords, localizeHtmlFile, fileFingerprint } from './api'
+import { loadConfig, saveConfig, scanDirectory, indexRoot, deletePath, renamePath, searchFiles, readText, writeText, writeFileBytes, readOfficeMd, aiChatStream, summarizeFiles, loadSummaries, clearSummaries, removeImageRecords, localizeHtmlFile, fileFingerprint } from './api'
 import type { FileEntry, AppConfig, NewFileType } from './types'
 import type { PageKey } from './store'
 import { KIND_LABEL } from './types'
@@ -40,7 +40,7 @@ const activeBaseDir = computed<string | null>(() => {
   return i > 0 ? p.slice(0, i) : null
 })
 const showSettings = ref(false)
-/** PreviewPane 实例引用：office 保存时调 exportOffice() 取原生二进制 */
+/** PreviewPane 实例引用：office 保存时调 saveOffice() 取编辑后的 OOXML 字节 */
 const paneRef = ref<any>(null)
 const showLibDialog = ref(false)
 /** 新建文件弹窗：默认落当前打开目录，可在弹窗内改到别处 */
@@ -565,6 +565,8 @@ async function saveAsCurrent() {
   const t = state.tabs.find((x) => x.entry.path === state.activeTabPath)
   if (!t) return
   const ext = (t.entry.ext || '').toLowerCase()
+  // PDF 是二进制增量编辑，另存为不能走文本通道（会把文件写成空内容）
+  if (ext === 'pdf') { showToast('PDF 保存会直接覆盖原文件'); return }
   const target = await save({
     defaultPath: t.entry.name,
     filters: ext ? [{ name: ext.toUpperCase(), extensions: [ext] }] : []
@@ -656,6 +658,7 @@ async function mdSourceFor(entry: FileEntry): Promise<string | null> {
   const ext = (entry.ext || '').toLowerCase()
   if (ext !== 'md' && ext !== 'markdown') return null
   const t = state.tabs.find((x) => x.entry.path === entry.path)
+  if (t?.stream) return null
   if (t) return t.content
   return readText(entry.path)
 }
@@ -769,8 +772,12 @@ async function doRefreshDoc(t: OpenTab, auto = false) {
       await localizeTabHtml(t)
     } else if (viewerTypeFor(t.entry)) {
       t.viewer = await buildViewer(t.entry)
+      // 常驻实例刷新必须击穿缓存重新读盘，否则磁盘改动不生效
+      if (officeEditable(t.entry)) t.officeRev = (t.officeRev ?? 0) + 1
+      if (ext === 'pdf') t.pdfRev = (t.pdfRev ?? 0) + 1
       // office 枢纽内容（md）/ csv 原文一并重读，保持编辑态与磁盘一致
-      if (officeEditable(t.entry) && !t.viewer.error) {
+      // csv/tsv 走表格引擎，不经 md 枢纽，仍读原文
+      if (officeEditable(t.entry) && !['csv', 'tsv'].includes(ext) && !t.viewer.error) {
         try {
           const md = await readOfficeMd(t.entry.path)
           if (md.length <= MAX_PREVIEW_CHARS) t.content = md
@@ -785,13 +792,20 @@ async function doRefreshDoc(t: OpenTab, auto = false) {
         }
       }
       t.dirty = false
+    } else if (t.stream) {
+      // 流式页签不重读全文：自增 rev 让编辑器从头分片重读，指纹随即同步
+      t.streamRev = (t.streamRev ?? 0) + 1
+      t.dirty = false
     } else {
       const text = await readText(t.entry.path)
       if (text.length > MAX_PREVIEW_CHARS) {
-        showToast('文件过大，取消刷新')
-        return
+        // 外部把文件改到超大：转为流式页签，避免把全文塞进 content
+        t.content = ''
+        t.stream = true
+        t.streamRev = (t.streamRev ?? 0) + 1
+      } else {
+        t.content = text
       }
-      t.content = text
       t.dirty = false
       clearLocalizeCache(t.entry.path)
     }
@@ -873,15 +887,27 @@ function tabBindings() {
       }
     }
   })
-  const headings = computed<MarkdownHeading[]>(() => parseMarkdown(content.value).headings)
+  /* ponytail: 按 content 引用缓存大纲。切页签只是换 activeTab，不该重跑全量
+     marked.parse（Office md 枢纽可达 5MB，且 Office 页签根本不显示大纲）。
+     上限：content 被原地改写不检测；升级：按 path + 版本号缓存。 */
+  let lastSrc = ''
+  let lastHeadings: MarkdownHeading[] = []
+  const headings = computed<MarkdownHeading[]>(() => {
+    const src = content.value
+    if (src === lastSrc) return lastHeadings
+    lastSrc = src
+    lastHeadings = officeEditable(activeTab.value?.entry)
+      ? []
+      : parseMarkdown(src).headings
+    return lastHeadings
+  })
   const dirty = computed(() => activeTab.value?.dirty ?? false)
   return { content, headings, dirty, activeTab }
 }
 
 /**
- * 文本预览上限（字符）：超大文件整体 innerHTML 布局会卡死主线程。
- * 现改为流式分片注入（见 MdPreview），单份解析+净化为一次有界准备，正文逐段出现，
- * 故上限放宽到 5MB；更极端的大小仍拒预览以防内存膨胀。
+ * 常规文本全量载入上限（字节 / 字符）：MdPreview 已做解析缓存与一次注入，5MB 内可直接编辑。
+ * 超过阈值走 CodeEditor 流式只读预览（Rust 字节区间 + TextDecoder stream），不拒绝打开。
  */
 const MAX_PREVIEW_CHARS = 5_000_000
 
@@ -891,6 +917,16 @@ function ensureWorkspaceView() {
   if (state.page === 'home' || state.page === 'help' || state.page === 'similar') {
     state.page = 'files'
   }
+}
+
+/** 超大文本：只建页签与指纹基线，正文由 CodeEditor 按字节区间流式装载 */
+async function openStreamTab(entry: FileEntry) {
+  ensureWorkspaceView()
+  state.tabs.push({ entry, content: '', dirty: false, stream: true, streamRev: 0 })
+  const rtab = state.tabs[state.tabs.length - 1]
+  state.activeTabPath = entry.path
+  state.selected = entry
+  await updateFingerprint(rtab)
 }
 
 async function openTab(entry: FileEntry) {
@@ -919,7 +955,8 @@ async function openTab(entry: FileEntry) {
     rtab.viewer = await buildViewer(entry)
     if (rtab.viewer.error) showToast(rtab.viewer.error)
     // docx/xlsx：Markdown 枢纽往返编辑——读为 md，保存写回原格式
-    if (officeEditable(entry) && !rtab.viewer.error) {
+    // csv/tsv 也走 office 表格引擎，但内容不经 md 枢纽，仍读原文
+    if (officeEditable(entry) && !['csv', 'tsv'].includes((entry.ext || '').toLowerCase()) && !rtab.viewer.error) {
       try {
         const md = await readOfficeMd(entry.path)
         if (md.length > MAX_PREVIEW_CHARS) {
@@ -943,13 +980,13 @@ async function openTab(entry: FileEntry) {
   }
 
   if (entry.size > MAX_PREVIEW_CHARS) {
-    showToast(`文件过大（${(entry.size / 1024 / 1024).toFixed(1)} MB），暂不支持预览`)
+    await openStreamTab(entry)
     return
   }
   try {
     const text = await readText(entry.path)
     if (text.length > MAX_PREVIEW_CHARS) {
-      showToast(`文件过大（${(text.length / 1024 / 1024).toFixed(1)} MB），暂不支持预览`)
+      await openStreamTab(entry)
       return
     }
     state.tabs.push({ entry, content: text, dirty: false })
@@ -1034,38 +1071,38 @@ async function saveCurrent() {
   if (saving) return
   const t = state.tabs.find((x) => x.entry.path === state.activeTabPath)
   if (!t) return
+  // 流式页签只读且 content 为空，写盘会把大文件清空
+  if (t.stream) {
+    showToast('超大文件为流式只读预览，不写盘')
+    return
+  }
   saving = true
   try {
     const ext = (t.entry.ext || '').toLowerCase()
-    if (ext === 'docx' || ext === 'xlsx') {
-      // office 原生编辑：编辑器导出原格式二进制，直接落盘；
-      // docx 原生编辑器不可用（失败回退 Markdown 枢纽）时导出为 null → md 写回 docx
-      const b64 = await paneRef.value?.exportOffice?.()
-      if (b64) {
-        await writeBinaryBase64(t.entry.path, b64)
-      } else if (ext === 'docx') {
-        await writeOfficeMd(t.entry.path, t.content)
-      } else {
-        throw new Error('编辑器未就绪，导出失败')
-      }
-    } else if (ext === 'pptx') {
-      // Univer 幻灯片画布：把文本改动按 manifest 写回 OOXML，失败则提示并不清脏标记
-      const ok = await paneRef.value?.commitPptx?.()
-      if (!ok) throw new Error('幻灯片写回失败')
+    if (ext === 'pdf') {
+      // PDF 增量编辑：pdf-lib 在原字节上叠加改动，写回同一路径；扫描件 / 无改动不落盘
+      const bytes = await paneRef.value?.savePdf?.()
+      if (!bytes) { t.dirty = false; t.externalChanged = false; return }
+      await writeFileBytes(t.entry.path, bytes)
+    } else if (officeEditable(t.entry)) {
+      // docx/xlsx/pptx 统一：Office 引擎导出编辑后的 OOXML 字节，原始字节通道写回原路径
+      const bytes = await paneRef.value?.saveOffice?.()
+      if (!bytes) throw new Error('Office 编辑器未就绪，导出失败')
+      await writeFileBytes(t.entry.path, bytes)
     } else {
       await writeTextNoted(t)
     }
     t.dirty = false
     t.externalChanged = false
-    // 保存即写入：同步指纹，避免轮询把刚保存的文件误判为外部变更又刷新一遍
-    void updateFingerprint(t)
+    // 必须 await：异步基线未落时下一轮轮询会误判外部变更，重读 6MB 并重建 Worker
+    await updateFingerprint(t)
     // html/htm：源码已写盘，重建本地化内容并递增 rev，切回预览时 iframe 强制重载
     if (ext === 'html' || ext === 'htm') {
       await localizeTabHtml(t)
       t.htmlRev = (t.htmlRev ?? 0) + 1
     }
-    // office 保存后重建富预览（后端 docx HTML / SheetJS / pptx 懒加载），使预览态与磁盘一致
-    if (officeEditable(t.entry) && t.viewer) {
+    // 非 office 的富预览重建；Office / PDF 编辑器按字节自行渲染，不依赖 viewer
+    if (!officeEditable(t.entry) && ext !== 'pdf' && t.viewer) {
       t.viewer = await buildViewer(t.entry)
     }
     showToast('已保存')
@@ -1324,7 +1361,7 @@ let watchTimer: ReturnType<typeof setInterval> | null = null
 async function pollFileChanges() {
   const t = activeTab.value
   if (!t || t.entry.kind === 'archive') return
-  if (refreshing || t.localizing || t.htmlLocalizing) return
+  if (refreshing || saving || t.localizing || t.htmlLocalizing) return
   let fp: string | null = null
   try {
     fp = await fileFingerprint(t.entry.path)
@@ -1427,11 +1464,11 @@ onMounted(init)
       @click="sidebarCollapsed = false"
     >›</button>
     <div class="main-col">
-      <div class="topbar">
+      <!-- <div class="topbar">
         <div class="topbar-left">
           <div class="topbar-title">{{ pageTitle }}</div>
         </div>
-      </div>
+      </div> -->
 
       <HomePage
         v-if="state.page === 'home'"
@@ -1468,6 +1505,7 @@ onMounted(init)
             :base-path="activeBaseDir"
             :doc-path="activeTab ? activeTab.entry.path : null"
             :edit-on-open="justCreatedPath"
+            :theme="theme"
             @switch-tab="switchTab"
             @close-tab="requestCloseTab"
             @close-tabs="requestCloseTabs"
@@ -1482,6 +1520,7 @@ onMounted(init)
             @dirty="markOfficeDirty"
             @refresh-doc="onRefreshDoc"
             @localizing="onMdLocalizing"
+            @toast="showToast"
           />
         <FileBrowser
           v-else

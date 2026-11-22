@@ -1,0 +1,306 @@
+/* Office Ribbon：选项卡 + 分组命令区，颜色全部走 MdView 主题变量 */
+.ot-ribbon {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  user-select: none;
+}
+
+.ot-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  height: 26px;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-3);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.ot-tabs::-webkit-scrollbar { display: none; }
+
+.ot-tab {
+  position: relative;
+  height: 26px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ot-tab:hover { color: var(--text); background: color-mix(in srgb, var(--panel) 55%, transparent); }
+
+.ot-tab-on {
+  background: var(--panel);
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.ot-kind {
+  margin: auto 0 auto auto;
+  padding-left: 12px;
+  color: var(--text-3);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.ot-readonly {
+  margin: auto 0 auto 10px;
+  color: var(--text-3);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* 单行命令区：高度由按钮决定；横向溢出可滚动但不显示滚动条（滚轮转发在组件内） */
+.ot-groups-wrap {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.ot-groups {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: stretch;
+  padding: 4px 8px 2px;
+  background: var(--panel);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.ot-groups::-webkit-scrollbar { display: none; }
+
+/* 与顶部页签条一致：左右箭头 + 边缘淡出，提示并到达被裁掉的命令 */
+.ot-arrow {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  bottom: 0;
+  width: 20px;
+  padding: 0;
+  border: 0;
+  background: var(--panel);
+  color: var(--text-2);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ot-arrow:hover { color: var(--accent); background: var(--panel-3); }
+.ot-arrow-left { left: 0; border-right: 1px solid var(--border); }
+.ot-arrow-right { right: 0; border-left: 1px solid var(--border); }
+
+.ot-fade {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  width: 34px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s;
+}
+
+.ot-fade.show { opacity: 1; }
+.ot-fade.left { left: 0; background: linear-gradient(to right, var(--panel), transparent); }
+.ot-fade.right { right: 0; background: linear-gradient(to left, var(--panel), transparent); }
+
+.ot-group {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 0 8px;
+  border-right: 1px solid var(--border);
+}
+
+.ot-group:last-child { border-right: 0; }
+
+.ot-group-items {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 2px;
+  min-height: 24px;
+}
+
+.ot-group-name {
+  padding: 2px 0 0;
+  color: var(--text-3);
+  font-size: 9px;
+  line-height: 1;
+  text-align: center;
+}
+
+.ot-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ot-icon {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ot-btn:hover:not(:disabled) { background: var(--panel-3); border-color: var(--border-2); }
+.ot-btn:disabled { color: var(--text-3); cursor: default; opacity: 0.5; }
+/* B 级按钮（Excel 专有 / 外部依赖）：灰显，title 说明「不支持：<原因>」 */
+.ot-btn.ot-off { color: var(--text-3); opacity: 0.45; cursor: not-allowed; }
+.ot-btn.ot-off:hover { background: none; border-color: var(--border); }
+
+.ot-btn.ot-on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+
+.ot-btn.ot-open { border-color: var(--border-2); background: var(--panel-3); }
+
+/* 大按钮在紧凑 Ribbon 中仍横排，避免把整条工具条撑到 90px+ */
+.ot-big {
+  flex-direction: row;
+  gap: 4px;
+  width: auto;
+  height: 24px;
+  padding: 0 6px;
+  text-align: left;
+}
+
+.ot-big .ot-icon { width: 14px; height: 14px; }
+.ot-big > span { max-width: none; }
+
+.ot-menu-btn { padding: 0 6px; }
+.ot-caret { color: var(--text-3); font-size: 9px; }
+
+.ot-sep {
+  flex: 0 0 1px;
+  height: 16px;
+  margin: 0 3px;
+  background: var(--border-2);
+}
+
+/* 下拉统一浮到 body，fixed 定位避开工具条滚动容器的裁剪 */
+.ot-pop {
+  position: fixed;
+  z-index: 10000;
+  left: var(--pop-x);
+  top: var(--pop-y);
+  display: flex;
+  flex-direction: column;
+  min-width: 172px;
+  max-width: 340px;
+  max-height: 320px;
+  padding: 5px;
+  overflow: auto;
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+  background: var(--panel-2);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-2) transparent;
+}
+
+.ot-pop::-webkit-scrollbar { width: 8px; height: 8px; }
+.ot-pop::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: var(--border-2);
+  background-clip: padding-box;
+}
+.ot-pop::-webkit-scrollbar-track { background: transparent; }
+
+.ot-pop-swatches {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  min-width: 196px;
+  max-width: 210px;
+}
+
+.ot-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ot-item:hover { background: var(--panel-3); }
+.ot-item-sep { margin-top: 5px; border-top: 1px solid var(--border); }
+.ot-empty { color: var(--text-3); cursor: default; }
+.ot-clear { width: 100%; justify-content: center; }
+
+.ot-hint {
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 10px;
+  text-overflow: ellipsis;
+}
+
+.ot-swatch {
+  width: 22px;
+  height: 22px;
+  margin: 2px;
+  border: 1px solid var(--border-2);
+  border-radius: 4px;
+  background: var(--swatch);
+  cursor: pointer;
+}
+
+.ot-swatch:hover { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.ot-flash {
+  position: absolute;
+  z-index: 10001;
+  top: 28px;
+  right: 10px;
+  max-width: 340px;
+  padding: 7px 11px;
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  background: var(--panel-2);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+  color: var(--text);
+  font-size: 11px;
+  pointer-events: none;
+}

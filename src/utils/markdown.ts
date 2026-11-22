@@ -1,5 +1,6 @@
 import { marked, Renderer, type Tokens } from 'marked'
 import { convertFileSrc } from '@tauri-apps/api/core'
+import katex from 'katex'
 
 export interface MarkdownHeading {
   level: number
@@ -57,8 +58,42 @@ function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;')
 }
 
+/**
+ * 把 Markdown 里的块级数学公式 `$$ … $$` 渲染成 KaTeX HTML。
+ * 先 stash <pre> 代码块与 .mermaid 块，避免代码 / 图源码里的 `$$` 被误当公式。
+ * 单个 `$…$` 行内公式易与货币等文本冲突，暂时只支持块级，降低误伤。
+ */
+function renderMathPiece(tex: string, display: boolean): string {
+  try {
+    return katex.renderToString(tex.trim(), {
+      displayMode: display,
+      throwOnError: false,
+      output: 'htmlAndMathml'
+    })
+  } catch {
+    return escapeHtml(tex)
+  }
+}
+
+export function renderMath(html: string): string {
+  const holders: string[] = []
+  let out = html.replace(/<pre[\s\S]*?<\/pre>/g, (m) => {
+    holders.push(m)
+    return `__MDV_H${holders.length - 1}__`
+  })
+  out = out.replace(/<div class="mermaid">[\s\S]*?<\/div>/g, (m) => {
+    holders.push(m)
+    return `__MDV_H${holders.length - 1}__`
+  })
+  out = out.replace(/\$\$([\s\S]+?)\$\$/g, (_m, t) => {
+    return `<div class="md-math-block">${renderMathPiece(t, true)}</div>`
+  })
+  out = out.replace(/__MDV_H(\d+)__/g, (_m, i) => holders[Number(i)])
+  return out
+}
+
 export function renderMarkdown(md?: string | null): string {
-  return marked.parse(md || '', { gfm: true, breaks: true }) as string
+  return renderMath(marked.parse(md || '', { gfm: true, breaks: true }) as string)
 }
 
 export function parseMarkdown(md?: string | null): MarkdownParseResult {
@@ -70,8 +105,16 @@ export function parseMarkdown(md?: string | null): MarkdownParseResult {
   ;(renderer as any).code = function (this: any, token: any) {
     const text: string = token.text ?? ''
     const lang = ((token.lang || '') as string).split(/\s+/)[0].toLowerCase()
-    if (lang === 'mermaid') {
-      // mermaid 图：交给 MdPreview 中 mermaid.run 渲染
+    // mermaid 图：直接标注 ```mermaid 或 ```flowchart/graph(sequenceDiagram…) 都识别；
+    // 也兜底内容以 mermaid 关键字开头的情况。交给 MdPreview 中 mermaid.run 渲染。
+    const MERMAID_LANGS = [
+      'mermaid', 'flowchart', 'seq', 'sequence', 'statediagram', 'gantt',
+      'er', 'erd', 'journey', 'git', 'gitgraph', 'mindmap', 'timeline', 'pie', 'quadrantchart'
+    ]
+    const looksMermaid =
+      MERMAID_LANGS.includes(lang) ||
+      /^(?:flowchart|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|journey|mindmap|timeline|pie|quadrantChart)\b/.test(text.trim())
+    if (looksMermaid) {
       return `<div class="mermaid">${escapeHtml(text)}</div>`
     }
     const htmlLangs = ['html', 'svg', 'xml']
@@ -105,5 +148,5 @@ export function parseMarkdown(md?: string | null): MarkdownParseResult {
     renderer
   } as any) as unknown as string
 
-  return { html, headings }
+  return { html: renderMath(html), headings }
 }

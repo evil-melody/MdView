@@ -1,0 +1,423 @@
+/* PPT 形状级交互：选中外框、8 个缩放手柄。
+   静态样式集中在此；框的位置/尺寸与手柄视觉尺寸由 :style 注入动态值。 */
+
+.ov-shape-ui {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+}
+
+/* 选中集合的外接矩形：唯一带手柄的主框 */
+.ov-shape-main {
+  position: absolute;
+  box-sizing: border-box;
+  border: var(--ov-shape-b, 1px) solid var(--accent, #4a6cf7);
+  pointer-events: none;
+}
+
+/* 多选时给每个形状补一个细框，标出各自的选中态 */
+.ov-shape-selbox {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px dashed var(--accent, #4a6cf7);
+  opacity: 0.8;
+  pointer-events: none;
+}
+
+.ov-shape-handle {
+  position: absolute;
+  box-sizing: border-box;
+  width: var(--ov-shape-h, 8px);
+  height: var(--ov-shape-h, 8px);
+  background: #fff;
+  border: var(--ov-shape-b, 1px) solid var(--accent, #4a6cf7);
+  border-radius: 1px;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+}
+
+.ov-shape-h-nw { left: 0; top: 0; cursor: nwse-resize; }
+.ov-shape-h-n  { left: 50%; top: 0; cursor: ns-resize; }
+.ov-shape-h-ne { left: 100%; top: 0; cursor: nesw-resize; }
+.ov-shape-h-e  { left: 100%; top: 50%; cursor: ew-resize; }
+.ov-shape-h-se { left: 100%; top: 100%; cursor: nwse-resize; }
+.ov-shape-h-s  { left: 50%; top: 100%; cursor: ns-resize; }
+.ov-shape-h-sw { left: 0; top: 100%; cursor: nesw-resize; }
+.ov-shape-h-w  { left: 0; top: 50%; cursor: ew-resize; }
+
+/* Office 式旋转手柄：圆形把手 + 连线，作为主框子元素随框一起旋转。
+   尺寸按画布缩放反向补偿（--ov-shape-h / --ov-shape-b 由 :style 注入）。 */
+.ov-rot-handle {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  transform: translate(-50%, -100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+}
+.ov-rot-handle:active { cursor: grabbing; }
+.ov-rot-grip {
+  box-sizing: border-box;
+  width: calc(var(--ov-shape-h, 8px) * 1.6);
+  height: calc(var(--ov-shape-h, 8px) * 1.6);
+  border: var(--ov-shape-b, 1px) solid var(--accent, #4a6cf7);
+  border-radius: 50%;
+  background: #fff;
+}
+.ov-rot-stem {
+  width: var(--ov-shape-b, 1px);
+  height: calc(var(--ov-shape-h, 8px) * 2);
+  background: var(--accent, #4a6cf7);
+}
+
+/* 文本层分级命中：非编辑态恒不接收指针，move 手势直接落到 ov-slide-el；编辑态才放开以选字 */
+.ov-slide-text-locked { pointer-events: none; }
+/* 形状文本就地编辑：仅编辑态挂载的 contenteditable，纯文本节点 + pre-wrap 保留换行 */
+.ov-slide-editable .ov-slide-text.ov-slide-text-edit {
+  display: block;
+  pointer-events: auto;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  outline: 2px solid var(--accent, #4a6cf7);
+  outline-offset: -2px;
+}
+
+/* 框选矩形：空白拖拽时的半透明选框；边框粗细按画布缩放反向补偿（--ov-shape-b 由 :style 注入） */
+.ov-marquee {
+  position: absolute;
+  box-sizing: border-box;
+  border: var(--ov-shape-b, 1px) solid var(--accent, #4a6cf7);
+  background: rgba(74, 108, 247, 0.12);
+  pointer-events: none;
+  z-index: 45;
+}
+
+/* 对齐吸附参考线：搬移对齐到其它形状 / 画布边·中心时显示。
+   容器铺满画布（随 scale 缩放）；线本身粗细由 :style 注入 1/scale px，保证屏幕恒约 1px。 */
+.ov-align-guides {
+  position: absolute;
+  inset: 0;
+  z-index: 55;
+  pointer-events: none;
+}
+.ov-align-guide {
+  position: absolute;
+  background: #ff3b30;
+}
+.ov-align-guide-v { top: 0; height: 100%; }
+.ov-align-guide-h { left: 0; width: 100%; }
+
+/* 主题 / 母版编辑入口：视图内浮动按钮 + 侧面板（锚在 position:relative 的舞台内） */
+.ov-theme-toggle {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 60;
+  padding: 6px 12px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  background: var(--panel, #fff);
+  color: var(--text, #222);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ov-theme-toggle:hover { border-color: var(--accent, #4a6cf7); }
+
+.ov-theme-panel {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 60;
+  box-sizing: border-box;
+  width: 300px;
+  max-height: calc(100% - 20px);
+  overflow-y: auto;
+  padding: 10px 12px 14px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 8px;
+  background: var(--panel, #fff);
+  color: var(--text, #222);
+  font-size: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+.ov-theme-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.ov-theme-title { font-size: 13px; font-weight: 600; }
+.ov-theme-close { border: none; background: transparent; color: var(--text-2, #888); font-size: 18px; line-height: 1; cursor: pointer; }
+.ov-theme-sec { padding: 8px 0; border-top: 1px solid var(--border-2, #eee); }
+.ov-theme-label { margin: 4px 0 6px; color: var(--text-2, #888); font-size: 11px; }
+.ov-theme-val { margin-bottom: 8px; font-size: 12px; }
+.ov-theme-layouts { display: flex; flex-wrap: wrap; gap: 4px; }
+.ov-theme-layout {
+  padding: 4px 8px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text, #222);
+  font-size: 11px;
+  cursor: pointer;
+}
+.ov-theme-layout-on { border-color: var(--accent, #4a6cf7); background: var(--accent-soft, #eef); color: var(--accent, #4a6cf7); }
+.ov-theme-row { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+.ov-theme-swatch { flex: 0 0 auto; width: 16px; height: 16px; border: 1px solid var(--border, #ccc); border-radius: 3px; }
+.ov-theme-key { flex: 0 0 108px; color: var(--text-2, #888); font-size: 11px; }
+.op-prompt-input.ov-theme-input { flex: 1 1 auto; width: auto; min-width: 0; padding: 3px 6px; font-size: 11px; }
+.ov-theme-act {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text, #222);
+  font-size: 11px;
+  cursor: pointer;
+}
+.ov-theme-act:hover { border-color: var(--accent, #4a6cf7); }
+.ov-theme-layout:disabled, .ov-theme-act:disabled, .op-prompt-input:disabled { opacity: 0.5; cursor: default; }
+
+/* ---------- 动画播放（解析自 p:timing，按 mainSeq clickEffect 顺序触发） ---------- */
+.ov-slide-el.ov-anim-wait { visibility: hidden; }
+@keyframes ovAnimAppear { from { visibility: hidden; } to { visibility: visible; } }
+.ov-slide-el.ov-anim-appear { animation: ovAnimAppear 0.01s both; }
+@keyframes ovAnimFade { from { opacity: 0; visibility: hidden; } to { opacity: 1; visibility: visible; } }
+.ov-slide-el.ov-anim-fade { animation: ovAnimFade 0.5s ease both; }
+@keyframes ovAnimWipe { from { clip-path: inset(0 0 100% 0); visibility: hidden; } to { clip-path: inset(0 0 0 0); visibility: visible; } }
+.ov-slide-el.ov-anim-wipe { animation: ovAnimWipe 0.5s ease both; }
+/* emphasis：起始强制可见（等待态隐藏后由动画显示），结束时保持可见 */
+@keyframes ovAnimSpin { from { transform: rotate(0deg); visibility: visible; } to { transform: rotate(360deg); visibility: visible; } }
+.ov-slide-el.ov-anim-spin { animation: ovAnimSpin 0.6s ease both; }
+@keyframes ovAnimGrowShrink { 0% { transform: scale(1); visibility: visible; } 50% { transform: scale(1.35); } 100% { transform: scale(1); visibility: visible; } }
+.ov-slide-el.ov-anim-growShrink { animation: ovAnimGrowShrink 0.6s ease both; }
+/* exit：结束时保持隐藏（both 填充模式） */
+@keyframes ovAnimDisappear { from { visibility: visible; } to { visibility: hidden; } }
+.ov-slide-el.ov-anim-disappear { animation: ovAnimDisappear 0.01s both; }
+@keyframes ovAnimFadeOut { from { opacity: 1; visibility: visible; } to { opacity: 0; visibility: hidden; } }
+.ov-slide-el.ov-anim-fadeOut { animation: ovAnimFadeOut 0.5s ease both; }
+
+/* 播放按钮：锚在舞台右上，主题按钮下方 */
+.ov-anim-play {
+  position: absolute;
+  top: 44px;
+  right: 12px;
+  z-index: 60;
+  padding: 6px 12px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  background: var(--panel, #fff);
+  color: var(--text, #222);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ov-anim-play:hover { border-color: var(--accent, #4a6cf7); }
+
+/* ---------- 幻灯片切换（演示模式换页，作用于画布外框） ---------- */
+@keyframes ovTransFade { from { opacity: 0; } to { opacity: 1; } }
+.ov-slide-frame.ov-trans-fade { animation: ovTransFade 0.6s ease both; }
+@keyframes ovTransWipe { from { clip-path: inset(0 0 100% 0); } to { clip-path: inset(0 0 0 0); } }
+.ov-slide-frame.ov-trans-wipe { animation: ovTransWipe 0.6s ease both; }
+@keyframes ovTransPush { from { transform: translateY(40%); opacity: 0.4; } to { transform: none; opacity: 1; } }
+.ov-slide-frame.ov-trans-push { animation: ovTransPush 0.6s ease both; }
+@keyframes ovTransCut { from { opacity: 0; } to { opacity: 1; } }
+.ov-slide-frame.ov-trans-cut { animation: ovTransCut 0.08s both; }
+
+/* ---------- 演讲者备注面板：舞台底部可折叠，自绘控件 ---------- */
+.ov-notes-toggle {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  z-index: 60;
+  padding: 6px 12px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  background: var(--panel, #fff);
+  color: var(--text, #222);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ov-notes-toggle:hover { border-color: var(--accent, #4a6cf7); }
+.ov-notes-panel {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 60;
+  box-sizing: border-box;
+  max-height: 40%;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 10px 10px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 8px;
+  background: var(--panel, #fff);
+  color: var(--text, #222);
+  font-size: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+.ov-notes-title { flex: 0 0 auto; font-size: 11px; color: var(--text-2, #888); margin-bottom: 6px; }
+.ov-notes-edit {
+  flex: 1 1 auto;
+  min-height: 44px;
+  max-height: 140px;
+  overflow-y: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--border-2, #eee);
+  border-radius: 4px;
+  outline: none;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+.ov-notes-edit[contenteditable='true']:focus { border-color: var(--accent, #4a6cf7); }
+.ov-notes-edit[data-empty='true']:empty::before { content: '点击输入本页演讲者备注…'; color: var(--text-2, #aaa); }
+
+/* ---------- 表格单元格 / SmartArt 节点就地编辑 ---------- */
+.ov-cell-edit {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 100%;
+  outline: 2px solid var(--accent, #4a6cf7);
+  outline-offset: -2px;
+  background: var(--panel, #fff);
+  white-space: pre-wrap;
+  font-size: 12px;
+  padding: 2px 4px;
+}
+
+/* SmartArt 降级渲染：节点圆角矩形 + 连线（真实布局算法为已知边界） */
+.ov-slide-dgm { overflow: visible; }
+.ov-dgm-links { position: absolute; left: 0; top: 0; overflow: visible; }
+.ov-dgm-links line { stroke: var(--text-2, #8a8f98); stroke-width: 1.5; }
+.ov-dgm-node {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  border: 1px solid var(--accent, #4a6cf7);
+  border-radius: 6px;
+  background: var(--accent-soft, #eef2ff);
+  color: var(--text, #222);
+  font-size: 12px;
+  overflow: hidden;
+}
+.ov-dgm-text { display: block; max-height: 100%; overflow: hidden; white-space: pre-wrap; text-align: center; }
+.ov-dgm-edit {
+  box-sizing: border-box;
+  width: 100%;
+  outline: none;
+  white-space: pre-wrap;
+  text-align: center;
+  font-size: 12px;
+}
+
+/* 右键菜单提示行（不可点的说明文字） */
+.ov-ctx-hint { color: var(--text-2, #888); cursor: default; font-size: 11px; }
+
+/* 缩略图拖拽重排（第八批）：相对定位让指示线按 offsetTop 落在列表内容坐标 */
+.ov-slide-list { position: relative; }
+.ov-thumb-dragging { opacity: 0.45; cursor: grabbing; }
+.ov-thumb-drop-line {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 2px;
+  background: var(--accent, #4a6cf7);
+  box-shadow: 0 0 0 1px var(--accent-soft, #eef2ff);
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* ---------------------------------------------------------------- 原生图表（第九批） */
+/* 固定系列配色（与 Excel 域 PALETTE 一致）；几何层只用 ov-chart-*-N 类，颜色集中在这里 */
+.ov-chart-fill-0 { fill: #4472c4; }
+.ov-chart-fill-1 { fill: #ed7d31; }
+.ov-chart-fill-2 { fill: #a5a5a5; }
+.ov-chart-fill-3 { fill: #ffc000; }
+.ov-chart-fill-4 { fill: #5b9bd5; }
+.ov-chart-fill-5 { fill: #70ad47; }
+.ov-chart-fill-6 { fill: #264478; }
+.ov-chart-fill-7 { fill: #9e480e; }
+.ov-chart-stroke-0 { fill: none; stroke: #4472c4; stroke-width: 1.8; stroke-linejoin: round; }
+.ov-chart-stroke-1 { fill: none; stroke: #ed7d31; stroke-width: 1.8; stroke-linejoin: round; }
+.ov-chart-stroke-2 { fill: none; stroke: #a5a5a5; stroke-width: 1.8; stroke-linejoin: round; }
+.ov-chart-stroke-3 { fill: none; stroke: #ffc000; stroke-width: 1.8; stroke-linejoin: round; }
+.ov-chart-stroke-4 { fill: none; stroke: #5b9bd5; stroke-width: 1.8; stroke-linejoin: round; }
+.ov-chart-stroke-5 { fill: none; stroke: #70ad47; stroke-width: 1.8; stroke-linejoin: round; }
+.ov-chart-stroke-6 { fill: none; stroke: #264478; stroke-width: 1.8; stroke-linejoin: round; }
+.ov-chart-stroke-7 { fill: none; stroke: #9e480e; stroke-width: 1.8; stroke-linejoin: round; }
+.ov-chart-dot-0 { fill: #4472c4; }
+.ov-chart-dot-1 { fill: #ed7d31; }
+.ov-chart-dot-2 { fill: #a5a5a5; }
+.ov-chart-dot-3 { fill: #ffc000; }
+.ov-chart-dot-4 { fill: #5b9bd5; }
+.ov-chart-dot-5 { fill: #70ad47; }
+.ov-chart-dot-6 { fill: #264478; }
+.ov-chart-dot-7 { fill: #9e480e; }
+.ov-chart-axis { stroke: var(--text-2, #999); stroke-width: 0.6; fill: none; }
+.ov-chart-txt { fill: var(--text-1, #444); font-size: 9px; font-family: var(--font-ui, system-ui, sans-serif); }
+.ov-chart-title { fill: var(--text-1, #444); font-size: 10px; font-family: var(--font-ui, system-ui, sans-serif); }
+.ov-slide-chart { background: transparent; }
+.ov-slide-chart .ov-slide-svg { display: block; }
+
+/* 编辑图表数据面板（自绘可编辑块，禁原生表单控件） */
+.ov-chart-dlg { min-width: 460px; max-width: min(860px, 92vw); }
+.ov-chart-dlg-body { overflow: auto; max-height: 60vh; }
+.ov-chart-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.ov-chart-table .ov-chart-th,
+.ov-chart-table .ov-chart-td {
+  border: 1px solid var(--border, #d0d7e2);
+  padding: 2px 4px;
+  text-align: center;
+  vertical-align: middle;
+  min-width: 68px;
+  position: relative;
+}
+.ov-chart-table .ov-chart-corner,
+.ov-chart-table tbody .ov-chart-th { background: var(--bg-2, #f4f6fa); min-width: 92px; }
+.ov-chart-table .ov-chart-th-act,
+.ov-chart-table .ov-chart-td-act { min-width: 44px; border: 0; }
+.ov-chart-cell {
+  display: block;
+  min-width: 24px;
+  outline: none;
+  padding: 1px 2px;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+.ov-chart-cell:focus { background: var(--accent-soft, #eef2ff); box-shadow: 0 0 0 1px var(--accent, #4a6cf7); }
+.ov-chart-val { text-align: right; }
+.ov-chart-name,
+.ov-chart-cat { font-weight: 600; }
+.ov-chart-x {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 15px;
+  height: 15px;
+  line-height: 13px;
+  border-radius: 50%;
+  border: 1px solid var(--border, #d0d7e2);
+  background: var(--bg-1, #fff);
+  color: var(--text-2, #888);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+.ov-chart-x:hover { color: #c0392b; border-color: #c0392b; }
+.ov-chart-add {
+  border: 1px dashed var(--accent, #4a6cf7);
+  background: transparent;
+  color: var(--accent, #4a6cf7);
+  border-radius: 3px;
+  padding: 2px 7px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.ov-chart-add:hover { background: var(--accent-soft, #eef2ff); }
+.ov-chart-add-row { margin-top: 8px; }

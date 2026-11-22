@@ -1,0 +1,140 @@
+/* 表头筛选下拉（Office 式自动筛选）。静态样式集中于此；动态定位走 :style 绑定。
+   勾选方块 .ov-chk 定义在 office-subtotal.css（对话框共用）。 */
+
+/* 列头内的筛选按钮：放在列头右侧、列宽手柄左侧，互不遮挡 */
+.ov-col-label { pointer-events: none; }
+.ov-flt-btn {
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 5;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  cursor: pointer;
+}
+.ov-flt-btn:hover { background: var(--accent-soft); color: var(--accent-2); }
+.ov-flt-btn.ov-flt-on { color: var(--accent); font-weight: 700; }
+/* 已筛选的列头高亮（active 指示） */
+.ov-flt-active.ov-col-head { background: var(--accent-soft); color: var(--accent-2); }
+
+/* 下拉面板：Teleport 到 body，fixed 定位避免被 grid 滚动裁切。
+   overflow 保持可见：文本/数字筛选的二级菜单悬挑在面板右侧（Excel 同款）。 */
+.ov-flt-overlay { position: fixed; inset: 0; z-index: 9500; }
+.ov-flt-panel {
+  position: fixed;
+  z-index: 9501;
+  width: 240px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  background: var(--panel, #fff);
+  border: 1px solid var(--border, #ccc);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+  color: var(--text, #222);
+  font-size: 12px;
+}
+.ov-flt-sep { height: 1px; margin: 6px 2px; background: var(--border, #e0e0e0); flex: none; }
+.ov-flt-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 4px;
+  background: var(--input-bg, #fff);
+  color: var(--text, #222);
+  font-size: 12px;
+  outline: none;
+}
+.ov-flt-input:focus { border-color: var(--accent, #5b6ee1); }
+/* 自绘可编辑块（contenteditable，替代原生 input）：占位文本走 data-placeholder */
+.ov-flt-edit { min-height: 28px; cursor: text; white-space: pre-wrap; word-break: break-all; }
+.ov-flt-edit:empty::before { content: attr(data-placeholder); color: var(--muted, #999); }
+
+/* 菜单行（升序/降序/文本筛选…）：Office 全宽左对齐条目 */
+.ov-flt-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text, #222);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.ov-flt-item:hover { background: var(--accent-soft, #eef1ff); }
+.ov-flt-ico { width: 14px; text-align: center; flex: none; color: var(--text-2, #666); }
+.ov-flt-caret { margin-left: auto; color: var(--text-2, #666); font-size: 10px; }
+
+/* 二级菜单（文本筛选/数字筛选操作符）：悬挑在面板右侧 */
+.ov-flt-menuwrap { position: relative; }
+.ov-flt-flyout {
+  position: absolute;
+  left: calc(100% + 6px);
+  top: -4px;
+  z-index: 9502;
+  min-width: 132px;
+  padding: 4px;
+  background: var(--panel, #fff);
+  border: 1px solid var(--border, #ccc);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+}
+.ov-flt-flyitem {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text, #222);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ov-flt-flyitem:hover { background: var(--accent-soft, #eef1ff); }
+.ov-flt-flyon { background: var(--accent-soft, #eef1ff); color: var(--accent-2, #3d4fb8); font-weight: 600; }
+.ov-flt-flyout .ov-flt-sep { margin: 4px 2px; }
+
+/* 选中操作符后的取值输入（介于为两段） */
+.ov-flt-opval { display: flex; gap: 6px; padding: 5px 2px 1px; }
+
+/* 值清单：搜索框 + 全选 + 值行（button + 自绘勾选方块） */
+.ov-flt-search { padding: 2px; }
+.ov-flt-list {
+  margin-top: 4px;
+  max-height: 30vh;
+  overflow-y: auto;
+  border: 1px solid var(--border, #e5e5e5);
+  border-radius: 5px;
+}
+.ov-flt-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 3px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text, #222);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.ov-flt-row:hover { background: var(--accent-soft, #eef1ff); }
+.ov-flt-val { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-flt-empty { padding: 10px; text-align: center; color: var(--muted, #999); }

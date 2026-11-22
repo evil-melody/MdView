@@ -6,17 +6,19 @@ import type { MarkdownHeading } from '../utils/markdown'
 import MdPreview from './MdPreview.vue'
 import MindmapView from './MindmapView.vue'
 import BinaryViewer from './BinaryViewer.vue'
-import DocxInlineEditor from './DocxInlineEditor.vue'
-import PptxInlineEditor from './PptxInlineEditor.vue'
 import CodeEditor from './CodeEditor.vue'
 import FileIcon from './FileIcon.vue'
 import { viewerTypeFor, officeEditable } from '../utils/viewer'
 import { isCodeFile } from '../utils/codeLang'
 import { formatHtml, isMinifiedHtml } from '../utils/htmlFormat'
+import { transformJson } from '../utils/jsonFormat'
+import JsonView from './JsonView.vue'
 import { clipboardImageBlob, saveClipboardImage } from '../utils/pasteImage'
 import { createDomFind, iframeFindCss, iframeVideoCss, IFRAME_FIND_STYLE_ID } from '../utils/domFind'
 import { convertFileSrc } from '@tauri-apps/api/core'
+import { EditorView } from '@codemirror/view'
 import type { TabViewer } from '../store'
+import { wrap, setWrap } from '../composables/useWrap'
 
 const props = defineProps<{
   entry: FileEntry | null
@@ -32,6 +34,8 @@ const props = defineProps<{
   docPath?: string | null
   /** 新建文件的路径：命中时打开即切到「编辑」页签 */
   editOnOpen?: string | null
+  /** 应用主题：透传给 Office 引擎顶部栏与格式工具条 */
+  theme?: 'dark' | 'light'
 }>()
 
 const emit = defineEmits<{
@@ -52,62 +56,74 @@ const emit = defineEmits<{
   (e: 'refresh-doc'): void
   /** MdPreview 本地化进行中 → 上抛 App 写回页签（loading 条单一数据源） */
   (e: 'localizing', v: boolean): void
+  /** JSON 变换结果 / 错误提示 */
+  (e: 'toast', m: string): void
 }>()
 
 const tab = ref<ViewTab>('preview')
 const outlineOpen = ref(false)
 /** 编辑器报错文案：明确展示原因便于定位 */
 const editorErr = ref('')
-/** docx 原生编辑器解析失败时回退到纯文本编辑（不回退 vue-files-preview，避免双 Vue 崩溃） */
-const docxNativeFailed = ref(false)
 // immediate：新建文件后 PreviewPane 首次挂载时也要命中 editOnOpen 直接进编辑
 watch(
   () => props.entry?.path,
   (p) => {
     editorErr.value = ''
-    docxNativeFailed.value = false
     if (p && p === props.editOnOpen) tab.value = 'edit'
   },
   { immediate: true }
 )
 
-/** 文本类 + docx/xlsx/pptx 可编辑；未知扩展名（other）与 csv/tsv 也按文本尝试编辑 */
+const isPdfEntry = (entry: FileEntry | null | undefined) =>
+  (entry?.ext || '').toLowerCase() === 'pdf'
+const isPdf = computed(() => isPdfEntry(props.entry))
+/** 扫描件（无文本层）由 PdfEditor 探测后回传，禁止进编辑态 */
+const pdfReadonly = ref(new Set<string>())
+function onPdfReadonly(path: string, v: boolean) {
+  const next = new Set(pdfReadonly.value)
+  if (v) next.add(path)
+  else next.delete(path)
+  pdfReadonly.value = next
+}
+
+/** 文本类 + docx/xlsx/pptx + 非扫描 PDF 可编辑；未知扩展名（other）与 csv/tsv 也按文本尝试编辑 */
 const canEdit = computed(() => {
-  if (!props.entry) return false
+  if (!props.entry || streaming.value) return false
+  if (isPdf.value) return !pdfReadonly.value.has(props.entry.path)
   if (['markdown', 'text', 'config', 'code', 'other'].includes(props.entry.kind)) return true
   if (isCsvLike.value) return true
   return officeEditable(props.entry)
 })
 
 /**
- * 纯只读预览类（图片/PDF/音视频）——走 BinaryViewer，不显示编辑/保存。
- * docx/xlsx/pptx 支持编辑，故排除在外。
+ * 纯只读预览类（图片/音视频）——走 BinaryViewer，不显示编辑/保存。
+ * docx/xlsx/pptx 与 pdf 各有编辑器，故排除在外。
  */
 const isViewerKind = computed(() => {
   const v = viewerTypeFor(props.entry)
-  return v !== null && !officeEditable(props.entry)
+  return v !== null && v !== 'pdf' && !officeEditable(props.entry)
 })
 
-/** docx/xlsx/pptx：预览/编辑走各自编辑器 */
+/** docx/xlsx/pptx：预览与编辑共用同一个 Office 引擎实例 */
 const isOffice = computed(() => officeEditable(props.entry))
-const isDocx = computed(
-  () => (props.entry?.ext || '').toLowerCase() === 'docx'
-)
-const isPptx = computed(
-  () => (props.entry?.ext || '').toLowerCase() === 'pptx'
-)
-/** csv/tsv：预览走表格渲染，编辑走文本（CodeEditor），保留原格式 */
+/** csv/tsv：与 xlsx 同走 Office 表格引擎（内核以工作簿打开，保存写回原分隔符文本） */
 const isCsvLike = computed(() => {
   const ext = (props.entry?.ext || '').toLowerCase()
   return ext === 'csv' || ext === 'tsv'
 })
 
 /**
- * xlsx 编辑器懒加载：避免 SheetJS 首屏 chunk 阻塞。
+ * Office 宿主懒加载：组件 chunk 只在首次打开 docx/xlsx/pptx 时下载。
  */
 const EditorLoading = () => h('div', { class: 'editor-loading' }, '编辑器加载中…')
-const OfficeSheetEditor = defineAsyncComponent({
-  loader: () => import('./OfficeSheetEditor.vue'),
+const OfficeEngineHost = defineAsyncComponent({
+  loader: () => import('./OfficeEngineHost.vue'),
+  loadingComponent: EditorLoading,
+  delay: 150
+})
+/** PDF 编辑器同样懒加载：pdfjs + pdf-lib chunk 只在首次打开 pdf 时下载 */
+const PdfEditor = defineAsyncComponent({
+  loader: () => import('./PdfEditor.vue'),
   loadingComponent: EditorLoading,
   delay: 150
 })
@@ -130,6 +146,10 @@ const isHtml = computed(
 const activeTabObj = computed<OpenTab | null>(
   () => props.tabs?.find((t) => t.entry.path === props.activeTabPath) ?? null
 )
+
+/** 超大文本：正文按字节区间流式装载，只读且 content 为空 */
+const streaming = computed(() => !!activeTabObj.value?.stream)
+const streamRev = computed(() => activeTabObj.value?.streamRev ?? 0)
 
 /** html iframe 源：优先用 Rust 内联后的完整 HTML（srcdoc 同源渲染，图片以 data: 直嵌，
  *  不依赖 asset://）；仅当无 htmlContent 时回退到本地化临时文件的 asset:// 地址。 */
@@ -163,7 +183,20 @@ watch([tab, () => props.entry?.path], () => {
 })
 
 const showOutline = computed(
-  () => !!props.entry && props.headings.length > 0 && tab.value !== 'mindmap'
+  () => !!props.entry && props.headings.length > 0 && tab.value !== 'mindmap' && tab.value !== 'json'
+)
+
+/** JSON 专用页签：json* 扩展名，或整篇看起来是 JSON 的 txt / 未知文本 */
+const JSON_EXTS = ['json', 'jsonc', 'json5']
+const isJsonDoc = computed(() => {
+  if (!props.entry || streaming.value || isOffice.value || isPdf.value || isViewerKind.value) return false
+  if (JSON_EXTS.includes((props.entry.ext || '').toLowerCase())) return true
+  const s = props.content.trim()
+  return (s.startsWith('{') || s.startsWith('[')) && s.length < 2_000_000
+})
+/** 右键 JSON 变换可用面：文本类且可编辑（office / pdf / 图片 / 流式各自有编辑器，不走文本变换） */
+const canJsonTransform = computed(
+  () => !!props.entry && canEdit.value && !streaming.value && !isOffice.value && !isPdf.value && !isViewerKind.value
 )
 
 function scrollTo(id: string) {
@@ -171,34 +204,88 @@ function scrollTo(id: string) {
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
-/** xlsx 编辑器实例，供保存时导出原生二进制 */
-const officeRef = ref<any>(null)
-/** docx 原生编辑器实例，导出原生 .docx 字节 */
-const docxRef = ref<any>(null)
+/**
+ * Office 引擎实例按页签常驻：切页签只切 display，不销毁宿主实例 / Worker，
+ * 不重读盘、不重新解析 6.4MB 级文档。
+ * 首次挂载必须在可见态：引擎 docx 分页用 getBoundingClientRect() 测量块高，
+ * display:none 下首次渲染会把所有块高读成 0 且不再重测。
+ * ponytail: 实例数 = 打开过的 Office 页签数，不设 LRU。
+ * 上限：开很多大文档时内存线性增长。
+ * 升级：按最近访问顺序保留 3~4 个，超出者 destroy 并从集合移除。
+ */
+const mountedOfficePaths = ref(new Set<string>())
+const mountedPdfPaths = ref(new Set<string>())
+/** 集合内容未变就不赋新引用：否则每次切页签都让全部常驻实例做一次无谓 patch */
+function sameSet(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false
+  for (const x of a) if (!b.has(x)) return false
+  return true
+}
+watch(
+  () => [props.activeTabPath, props.tabs?.map((t) => t.entry.path).join('\u0000')] as const,
+  () => {
+    const live = new Set((props.tabs ?? []).map((t) => t.entry.path))
+    const nextOffice = new Set([...mountedOfficePaths.value].filter((p) => live.has(p)))
+    const nextPdf = new Set([...mountedPdfPaths.value].filter((p) => live.has(p)))
+    const active = (props.tabs ?? []).find((t) => t.entry.path === props.activeTabPath)
+    if (active && officeEditable(active.entry)) nextOffice.add(active.entry.path)
+    if (active && isPdfEntry(active.entry)) nextPdf.add(active.entry.path)
+    if (!sameSet(mountedOfficePaths.value, nextOffice)) mountedOfficePaths.value = nextOffice
+    if (!sameSet(mountedPdfPaths.value, nextPdf)) mountedPdfPaths.value = nextPdf
+  },
+  { immediate: true }
+)
 
-/** Uint8Array → base64（docx 原生字节经 write_binary_base64 落盘） */
-function bytesToBase64(bytes: Uint8Array): string {
-  let bin = ''
-  const chunk = 0x8000
-  for (let i = 0; i < bytes.length; i += chunk) {
-    bin += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)))
+const officeHosts = computed(() =>
+  (props.tabs ?? []).filter(
+    (t) => mountedOfficePaths.value.has(t.entry.path) && officeEditable(t.entry)
+  )
+)
+const pdfHosts = computed(() =>
+  (props.tabs ?? []).filter(
+    (t) => mountedPdfPaths.value.has(t.entry.path) && isPdfEntry(t.entry)
+  )
+)
+
+/** 每个页签一个引擎句柄：保存时按当前激活路径取对应实例 */
+type OfficeEngineApi = { save: () => Promise<Uint8Array | null> }
+const engines = new Map<string, OfficeEngineApi>()
+function setEngine(path: string, el: unknown) {
+  const api = el as OfficeEngineApi | null
+  if (api && typeof api.save === 'function') engines.set(path, api)
+  else engines.delete(path)
+}
+/** 按路径缓存 ref 回调：内联箭头函数每次 patch 都是新引用，会先 delete 再 set 句柄 */
+const refCache = new Map<string, (el: unknown) => void>()
+function engineRef(path: string, pdf = false) {
+  const key = (pdf ? 'p:' : 'o:') + path
+  let f = refCache.get(key)
+  if (!f) {
+    f = (el: unknown) => (pdf ? setPdfEngine(path, el) : setEngine(path, el))
+    refCache.set(key, f)
   }
-  return btoa(bin)
+  return f
 }
 
-/** 保存时取回编辑器内容：docx 走原生 .docx 字节，xlsx 走原生 base64 */
-async function exportOffice(): Promise<string | null> {
-  if (isDocx.value) {
-    const bytes = await docxRef.value?.exportDocx?.()
-    return bytes ? bytesToBase64(bytes) : null
-  }
-  return (await officeRef.value?.exportBase64?.()) ?? null
+async function saveOffice(): Promise<Uint8Array | null> {
+  const p = props.activeTabPath ?? props.entry?.path ?? ''
+  return (await engines.get(p)?.save()) ?? null
+}
+
+/** PDF 宿主同样按页签常驻：保存时按激活路径取对应实例导出新字节 */
+const pdfEngines = new Map<string, OfficeEngineApi>()
+function setPdfEngine(path: string, el: unknown) {
+  const api = el as OfficeEngineApi | null
+  if (api && typeof api.save === 'function') pdfEngines.set(path, api)
+  else pdfEngines.delete(path)
+}
+async function savePdf(): Promise<Uint8Array | null> {
+  const p = props.activeTabPath ?? props.entry?.path ?? ''
+  return (await pdfEngines.get(p)?.save()) ?? null
 }
 
 function onDocEditorError(msg: string) {
   editorErr.value = msg
-  // docx 原生解析失败 → 切回 Markdown 枢纽编辑器兜底
-  docxNativeFailed.value = true
 }
 
 function dismissEditorError() {
@@ -229,11 +316,6 @@ async function onPasteImage(ev: ClipboardEvent) {
   } catch (e) {
     onDocEditorError(String(e))
   }
-}
-
-/** pptx 自动保存由 PptxInlineEditor 在失焦时完成；保存按钮仅清脏标记 */
-async function commitPptx(): Promise<boolean> {
-  return true
 }
 
 // ---- 查找 / 替换 ----
@@ -269,6 +351,10 @@ const domFind = createDomFind(() => {
 
 /** 当前查找表面：dom=渲染预览，text=源编辑，none=无（iframe / CodeEditor 自带） */
 function findSurface(): 'dom' | 'text' | 'none' {
+  // Office 引擎自带查找；PDF 文本层未进 DOM；流式编辑器自带 CodeMirror 查找
+  if (isOffice.value || isPdf.value || streaming.value) return 'none'
+  // JSON 区左侧 CodeMirror 自带查找，右侧树只读，不参与主查找栏
+  if (tab.value === 'json') return 'none'
   if (tab.value === 'preview') {
     // HTML 预览：Rust 已把资源内联为 data: 并以 srcdoc 同源渲染，父窗口可直接读 iframe
     // DOM 做查找高亮；无 htmlContent（回退 asset://）时跨域不可查，交回 none。
@@ -319,9 +405,12 @@ function recomputeMatches(text?: string) {
       }
       findMatches.value.push({ start: m.index, end: m.index + m[0].length })
     }
-    if (findMatches.value.length) findIndex.value = 0
+    if (findMatches.value.length) {
+      findIndex.value = 0
+      findCur.value = 0
+      gotoMatch(false)
+    }
     findCount.value = findMatches.value.length
-    findCur.value = findIndex.value
   } else {
     findMatches.value = []
     findIndex.value = -1
@@ -330,14 +419,16 @@ function recomputeMatches(text?: string) {
   }
 }
 
-/** 选中当前命中并聚焦，使其进入视野（仅在 next/prev/替换 时调用，避免抢走查找框焦点） */
-function selectCurrentMatch() {
+/** 选中当前命中并滚动到视野：先聚焦编辑器让浏览器把选区（精确支持自动换行）滚入视野，再归还焦点给查找框。
+ *  focusEditor=true 时定位后停在编辑器（用于替换后继续编辑）；否则焦点留在查找框，可连续输入或点箭头。 */
+function gotoMatch(focusEditor = false) {
   const el = editorEl.value
   const matches = findMatches.value
   if (!el || matches.length === 0 || findIndex.value < 0) return
   const m = matches[findIndex.value]
-  el.focus()
+  el.focus({ preventScroll: false })
   el.setSelectionRange(m.start, m.end)
+  if (!focusEditor) findInputEl.value?.focus()
 }
 
 function findNext() {
@@ -348,7 +439,7 @@ function findNext() {
   }
   if (findMatches.value.length === 0) return
   findIndex.value = (findIndex.value + 1) % findMatches.value.length
-  selectCurrentMatch()
+  gotoMatch(false)
   findCur.value = findIndex.value
 }
 
@@ -361,7 +452,7 @@ function findPrev() {
   if (findMatches.value.length === 0) return
   findIndex.value =
     (findIndex.value - 1 + findMatches.value.length) % findMatches.value.length
-  selectCurrentMatch()
+  gotoMatch(false)
   findCur.value = findIndex.value
 }
 
@@ -377,7 +468,7 @@ function replaceCurrent() {
   if (findIndex.value >= findMatches.value.length) {
     findIndex.value = findMatches.value.length ? findMatches.value.length - 1 : -1
   }
-  selectCurrentMatch()
+  gotoMatch(false)
   findCur.value = findIndex.value
 }
 
@@ -469,7 +560,28 @@ function bindPreviewScroll() {
 }
 
 function onWindowKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape' && tabMenu.value) tabMenu.value = null
+  if (e.key === 'Escape') {
+    if (tabMenu.value) tabMenu.value = null
+    if (wrapMenu.value) wrapMenu.value = null
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+    // 焦点落在内容区但不在可编辑控件内时，原生 Ctrl/⌘+A 会选中整个页面（含应用外壳）。
+    // 改为在编辑器内选全：CodeMirror / textarea / 预览区，避免选到应用外。
+    // Office 视图（表格/Word/PPT）自带全选处理，不在这里抢。
+    const ae = document.activeElement as HTMLElement | null
+    const inPane = ae?.closest?.('.pane-body')
+    const inOffice = !!ae?.closest?.('.ov-sheet, .ov-doc-root, .ov-slides')
+    const editableFocused =
+      !!ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.isContentEditable || !!ae.closest?.('.cm-editor'))
+    if (inPane && !editableFocused && !inOffice) {
+      e.preventDefault()
+      selectAllInEditor()
+    } else if (!inPane && !editableFocused) {
+      // 焦点散落在外壳上（如侧栏/空白处）：拦下原生全选，避免把侧栏文件列表一起选中
+      e.preventDefault()
+    }
+    return
+  }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
     // 无可用查找面（HTML iframe / CodeEditor 自带）时交给各自处理，不抢键
     if (findSurface() === 'none') return
@@ -563,6 +675,36 @@ watch(tab, () => {
 const stripRef = ref<HTMLElement | null>(null)
 const overflow = ref({ left: false, right: false })
 const tabMenu = ref<{ path: string; x: number; y: number } | null>(null)
+/** 内容区右键菜单：自动换行开关对全部文档编辑器生效；editor 记录右键时聚焦的编辑器，供「全选」在编辑器内作用 */
+const wrapMenu = ref<{ x: number; y: number; sel?: { from: number; to: number; text: string }; editor?: HTMLElement | null } | null>(null)
+
+/** 在编辑器内「全选」：CodeMirror 用其 EditorView 选全文，textarea 用 .select()，避免选到应用外 */
+function selectAllInEditor() {
+  const root = wrapMenu.value?.editor ?? (document.activeElement as HTMLElement | null)
+  const cmDom = (root?.closest?.('.cm-editor') as HTMLElement | null) ?? (document.querySelector('.cm-editor') as HTMLElement | null)
+  if (cmDom) {
+    const view = EditorView.findFromDOM(cmDom)
+    if (view) {
+      view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } })
+      cmDom.focus()
+      return
+    }
+  }
+  const ta = (root?.tagName === 'TEXTAREA' ? root : document.querySelector('textarea.editor')) as HTMLTextAreaElement | null
+  if (ta) {
+    ta.focus()
+    ta.select()
+    return
+  }
+  const md = document.querySelector('.md-preview') as HTMLElement | null
+  if (md) {
+    const sel = window.getSelection()
+    const range = document.createRange()
+    range.selectNodeContents(md)
+    sel?.removeAllRanges()
+    sel?.addRange(range)
+  }
+}
 let stripObserver: ResizeObserver | null = null
 
 function updateOverflow() {
@@ -611,10 +753,55 @@ const tabMenuItems = computed(() => {
 })
 
 function openTabMenu(ev: MouseEvent, path: string) {
+  wrapMenu.value = null
   tabMenu.value = {
     path,
     x: Math.min(ev.clientX, window.innerWidth - 198),
     y: Math.min(ev.clientY, window.innerHeight - 158)
+  }
+}
+
+/**
+ * 打开菜单时快照选区：点击菜单项会让编辑器失焦，CodeMirror / textarea 的选区随之丢失。
+ * CodeMirror 的 DOM Selection 与 doc 偏移一一对应；textarea 用 selectionStart/End。
+ */
+function snapshotSelection(): { from: number; to: number; text: string } | undefined {
+  const ta = editorEl.value
+  if (ta && document.activeElement === ta && ta.selectionEnd > ta.selectionStart) {
+    return { from: ta.selectionStart, to: ta.selectionEnd, text: ta.value.slice(ta.selectionStart, ta.selectionEnd) }
+  }
+  const sel = window.getSelection()
+  const text = sel && !sel.isCollapsed ? sel.toString() : ''
+  if (!text.trim()) return undefined
+  const from = props.content.indexOf(text)
+  return from >= 0 ? { from, to: from + text.length, text } : undefined
+}
+
+/** 格式化 / 压缩：有选区只变换选区，无选区变换全文；whole=true 是 JSON 工具条按钮 */
+function applyJsonTransform(compact: boolean, whole = false) {
+  const picked = whole ? undefined : wrapMenu.value?.sel
+  wrapMenu.value = null
+  const src = picked && picked.text.trim() ? picked.text : props.content
+  const r = transformJson(src, compact)
+  if (!r.ok) return emit('toast', r.error)
+  if (!picked || !picked.text.trim()) {
+    emit('update:content', r.text)
+  } else {
+    emit('update:content', props.content.slice(0, picked.from) + r.text + props.content.slice(picked.to))
+  }
+  emit('dirty')
+  emit('toast', compact ? '已压缩为单行' : '已格式化')
+}
+
+function openWrapMenu(ev: MouseEvent) {
+  // Office 视图自带右键菜单：外壳菜单不叠加，避免 Word/PPT 出现两个菜单
+  if ((ev.target as HTMLElement | null)?.closest?.('.ov-sheet, .ov-doc-root, .ov-slides')) return
+  tabMenu.value = null
+  wrapMenu.value = {
+    x: Math.min(ev.clientX, window.innerWidth - 190),
+    y: Math.min(ev.clientY, window.innerHeight - 150),
+    sel: snapshotSelection(),
+    editor: document.activeElement as HTMLElement | null
   }
 }
 
@@ -651,7 +838,7 @@ onBeforeUnmount(() => {
   }
 })
 
-defineExpose({ exportOffice, commitPptx })
+defineExpose({ saveOffice, savePdf, openFind })
 </script>
 
 <template>
@@ -681,7 +868,7 @@ defineExpose({ exportOffice, commitPptx })
     <div class="pane-head">
       <div class="file-info">
         <button class="btn ghost icon-btn back-btn" title="返回文件列表" @click="emit('close')">←</button>
-        <span class="fname">{{ entry ? entry.name : '未选择文件' }}</span>
+        <span class="fname" :title="entry?.name">{{ entry ? entry.name : '未选择文件' }}</span>
         <span v-if="entry" class="ftag">{{ kindLabel[entry.kind] }}</span>
         <span v-if="dirty" class="dirty-dot" title="未保存">●</span>
         <span v-else-if="activeTabObj?.externalChanged" class="dirty-dot dirty-dot-warn" title="文件已在外部修改，刷新后同步">●</span>
@@ -704,6 +891,13 @@ defineExpose({ exportOffice, commitPptx })
           :disabled="!canEdit || entry?.kind !== 'markdown'"
           @click="selectTab('mindmap')"
         >脑图</button>
+        <button
+          v-if="isJsonDoc"
+          class="tab"
+          :class="{ active: tab === 'json' }"
+          title="左右分栏：源码编辑 + 格式化树，可格式化 / 压缩"
+          @click="selectTab('json')"
+        >JSON</button>
       </div>
       <div class="head-actions">
         <button
@@ -718,19 +912,19 @@ defineExpose({ exportOffice, commitPptx })
           </svg>
         </button>
         <button
-          v-if="canEdit"
+          v-if="canEdit && !isPdf"
           class="btn"
           title="打开 AI 助手浮窗"
           @click="emit('open-ai')"
         >AI 助手</button>
         <button
-          v-if="canEdit && !isOffice"
+          v-if="canEdit && !isOffice && !isPdf"
           class="btn"
           title="保存到其它位置"
           @click="emit('save-as')"
         >另存为</button>
         <button
-          v-if="entry && !isViewerKind"
+          v-if="entry && !isViewerKind && !isPdf && !streaming"
           class="btn"
           title="转换为其它格式（md -> pdf / docx / html …）"
           @click="emit('convert', $event)"
@@ -749,35 +943,69 @@ defineExpose({ exportOffice, commitPptx })
       <button class="ea-btn" @click="dismissEditorError">关闭</button>
     </div>
 
-    <div class="pane-body">
-      <!-- 图片 / PDF / 音视频 -->
+    <div class="pane-body" :class="{ 'no-wrap': !wrap }" @contextmenu.prevent="openWrapMenu">
+      <!-- docx/xlsx/pptx：每个访问过的页签常驻一个引擎实例，切页签只切 display。
+           引擎实例与「预览 / 编辑」页签无关，切 tab 只改 editable，不丢未保存改动。 -->
+      <OfficeEngineHost
+        v-for="t in officeHosts"
+        :key="t.entry.path"
+        :ref="engineRef(t.entry.path)"
+        v-show="isOffice && t.entry.path === activeTabPath"
+        :path="t.entry.path"
+        :name="t.entry.name"
+        :editable="tab === 'edit'"
+        :theme="theme || 'dark'"
+        :rev="t.officeRev ?? 0"
+        @change="emit('dirty')"
+        @error="onDocEditorError"
+      />
+      <!-- PDF：按页签常驻，扫描件（无文本层）由组件回传只读状态 -->
+      <PdfEditor
+        v-for="t in pdfHosts"
+        :key="t.entry.path"
+        :ref="engineRef(t.entry.path, true)"
+        v-show="isPdf && t.entry.path === activeTabPath"
+        :path="t.entry.path"
+        :rev="t.pdfRev ?? 0"
+        :editable="tab === 'edit'"
+        :active="isPdf && t.entry.path === activeTabPath"
+        @change="emit('dirty')"
+        @error="onDocEditorError"
+        @readonly="(v) => onPdfReadonly(t.entry.path, v)"
+      />
+      <!-- 非 Office 分支：与常驻引擎并列，以下 v-if / v-else-if / v-else 为一条链 -->
+      <template v-if="!isOffice">
+      <!-- 图片 / 音视频 -->
       <BinaryViewer v-if="isViewerKind" :entry="entry" :viewer="viewer" />
 
-      <template v-else-if="canEdit">
+      <!-- 超大文本：只读流式编辑器，正文不进页签 content；rev 变化即从头重读 -->
+      <CodeEditor
+        v-else-if="streaming"
+        :key="`stream-${entry!.path}-${streamRev}`"
+        class="flex1"
+        :content="''"
+        :path="entry!.path"
+        :size="entry!.size"
+        stream
+      />
+
+      <template v-else-if="canEdit && !isPdf">
         <div class="content-area">
-          <div v-if="tab === 'preview'" class="flex1">
-            <!-- docx：原生渲染（只读预览）。脱离 vue-files-preview/@vue-office/docx 的
-                 双 Vue 实例冲突（其预编译产物硬编码 vue@3.5.28，与应用 vue@3.5.13 不兼容，
-                 导致 instance.update/vnode.shapeFlag/component.emitsOptions 级联崩溃） -->
-            <DocxInlineEditor
-              v-if="isDocx"
-              :readonly="true"
-              :key="entry!.path"
-              :path="entry!.path"
-              @error="onDocEditorError"
-            />
-            <!-- xlsx：vue-files-preview 渲染 -->
-            <BinaryViewer v-else-if="isOffice && !isPptx" :entry="entry" :viewer="viewer" />
-            <!-- pptx：预览与编辑同款渲染（vue-files-preview 在该场景下易卡死，故用同款 HTML） -->
-            <PptxInlineEditor
-              v-else-if="isPptx"
-              :path="entry!.path"
-            />
+          <!-- JSON 专用区：左源码可编辑，右格式化树实时跟随 -->
+          <JsonView
+            v-if="tab === 'json'"
+            :content="content"
+            :path="entry!.path"
+            @update:content="(v: string) => emit('update:content', v)"
+            @dirty="emit('dirty')"
+            @transform="(compact: boolean) => applyJsonTransform(compact, true)"
+          />
+          <div v-else-if="tab === 'preview'" class="flex1">
             <!-- html：Rust 已把图片内联为 data: 并以 srcdoc 同源渲染（不依赖 asset://，
                  图片显示效果与 Chrome 打开本地文件一致，且可直接 Ctrl+F 查找高亮）。
                  仅在无 htmlContent 时回退到本地化临时文件的 asset:// 地址。 -->
             <iframe
-              v-else-if="isHtml && htmlContent"
+              v-if="isHtml && htmlContent"
               ref="htmlFrame"
               class="html-frame"
               :key="`srcdoc-${activeTabObj?.htmlRev ?? 0}`"
@@ -805,69 +1033,13 @@ defineExpose({ exportOffice, commitPptx })
               @localizing="emit('localizing', $event)"
               @update:content="(v: string) => emit('update:content', v)"
             />
-            <pre v-else ref="codeViewEl" class="code-view scrollable">{{ codePreview }}</pre>
+            <pre v-else ref="codeViewEl" class="code-view scrollable" :class="{ wrap }">{{ codePreview }}</pre>
             <!-- 预览态查找栏：渲染区 DOM 高亮跳转（编辑态另有分屏查找栏） -->
             <div v-if="findOpen && tab === 'preview'" class="find-bar">
               <input ref="findInputEl" class="find-input" :value="findQuery" placeholder="在预览中查找"
                 @input="onFindInput" @keydown.enter.prevent="findNext" @keydown.shift.enter.prevent="findPrev" />
               <button class="find-btn" title="上一个 (Shift+Enter)" @click="findPrev">↑</button>
               <button class="find-btn" title="下一个 (Enter)" @click="findNext">↓</button>
-              <label class="find-case"><input type="checkbox" v-model="findCase" @change="() => recomputeMatches()" />区分大小写</label>
-              <span class="find-count">{{ findCount ? (findCur + 1) + ' / ' + findCount : '0 / 0' }}</span>
-              <button class="find-close" title="关闭 (Esc)" @click="closeFind">×</button>
-            </div>
-          </div>
-          <div v-else-if="tab === 'edit' && isOffice" class="flex1">
-            <!-- docx：原生编辑（自绘受控 DOM + 图片/表格 + 原生 .docx 保存） -->
-            <DocxInlineEditor
-              v-if="isDocx && !docxNativeFailed"
-              ref="docxRef"
-              :key="entry!.path"
-              :path="entry!.path"
-              @change="emit('dirty')"
-              @error="onDocEditorError"
-            />
-            <!-- docx 原生解析失败兜底：纯文本编辑（不回退 vue-files-preview，避免双 Vue 崩溃） -->
-            <textarea
-              v-else-if="isDocx"
-              ref="editorEl"
-              class="editor scrollable full"
-              :value="content"
-              @input="emit('update:content', ($event.target as HTMLTextAreaElement).value)"
-              spellcheck="false"
-            ></textarea>
-            <!-- csv/tsv：文本方式编辑（CodeEditor），保存直接写回原文件 -->
-            <CodeEditor
-              v-else-if="isCsvLike"
-              :key="entry!.path"
-              :content="content"
-              :path="entry!.path"
-              @change="emit('dirty')"
-              @update:content="(v: string) => emit('update:content', v)"
-            />
-            <!-- xlsx：原生表格编辑器 -->
-            <OfficeSheetEditor
-              v-else-if="!isPptx"
-              ref="officeRef"
-              :key="entry!.path"
-              :path="entry!.path"
-              @change="emit('dirty')"
-            />
-            <!-- pptx：与预览同款渲染，支持文字失焦保存 / 图片替换 -->
-            <PptxInlineEditor
-              v-else
-              :path="entry!.path"
-              @change="emit('dirty')"
-            />
-            <div v-if="findOpen" class="find-bar">
-              <input ref="findInputEl" class="find-input" :value="findQuery" placeholder="查找"
-                @input="onFindInput" @keydown.enter.prevent="findNext" @keydown.shift.enter.prevent="findPrev" />
-              <input class="find-input" v-model="findReplace" placeholder="替换为"
-                @keydown.enter.prevent="findNext" @keydown.shift.enter.prevent="findPrev" />
-              <button class="find-btn" title="上一个 (Shift+Enter)" @click="findPrev">↑</button>
-              <button class="find-btn" title="下一个 (Enter)" @click="findNext">↓</button>
-              <button class="find-btn" title="替换当前" @click="replaceCurrent">替换</button>
-              <button class="find-btn" title="替换全部" @click="replaceAll">全部</button>
               <label class="find-case"><input type="checkbox" v-model="findCase" @change="() => recomputeMatches()" />区分大小写</label>
               <span class="find-count">{{ findCount ? (findCur + 1) + ' / ' + findCount : '0 / 0' }}</span>
               <button class="find-close" title="关闭 (Esc)" @click="closeFind">×</button>
@@ -899,6 +1071,7 @@ defineExpose({ exportOffice, commitPptx })
             <textarea
               ref="editorEl"
               class="editor scrollable"
+              :wrap="wrap ? 'soft' : 'off'"
               :value="content"
               @input="emit('update:content', ($event.target as HTMLTextAreaElement).value)"
               @paste="onPasteImage"
@@ -964,11 +1137,12 @@ defineExpose({ exportOffice, commitPptx })
         </div>
       </template>
 
-      <div v-else class="no-file">
+      <div v-else-if="!isPdf" class="no-file">
         <div class="nf-emoji">🗂</div>
         <p v-if="entry">所选类型（{{ kindLabel[entry.kind] }}）暂不支持预览，可在外部程序中打开。</p>
         <p v-else>从左侧选择 Markdown / 文本 / 代码文件开始预览与编辑。</p>
       </div>
+      </template>
     </div>
 
     <!-- 页签右键菜单：复用 App.css 的全局 ctx-* 样式 -->
@@ -986,6 +1160,31 @@ defineExpose({ exportOffice, commitPptx })
             :class="{ danger: it.danger }"
             @click.stop="it.run(); tabMenu = null"
           >{{ it.label }}</button>
+        </template>
+      </div>
+    </div>
+
+    <!-- 内容区右键菜单：自动换行开关对所有文档编辑器生效 -->
+    <div
+      v-if="wrapMenu"
+      class="ctx-overlay"
+      @click="wrapMenu = null"
+      @contextmenu.prevent="wrapMenu = null"
+    >
+      <div class="ctx-menu" :style="{ left: wrapMenu.x + 'px', top: wrapMenu.y + 'px' }">
+        <button class="ctx-item" @click.stop="setWrap(!wrap); wrapMenu = null">
+          {{ wrap ? '✓ ' : '' }}内容自动换行
+        </button>
+        <div class="ts-menu-sep"></div>
+        <button class="ctx-item" @click.stop="selectAllInEditor(); wrapMenu = null">全选（编辑器内）</button>
+        <template v-if="canJsonTransform">
+          <div class="ts-menu-sep"></div>
+          <button class="ctx-item" @click.stop="applyJsonTransform(false)">
+            格式化 JSON{{ wrapMenu.sel ? '（选区）' : '（全文）' }}
+          </button>
+          <button class="ctx-item" @click.stop="applyJsonTransform(true)">
+            压缩 JSON{{ wrapMenu.sel ? '（选区）' : '（全文）' }}
+          </button>
         </template>
       </div>
     </div>

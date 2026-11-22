@@ -1,0 +1,115 @@
+.jv {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg);
+}
+
+.jv-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.jv-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0.06em;
+}
+
+.jv-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 2px;
+}
+
+.jv-stat {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.jv-ok { font-size: 11px; color: var(--green); white-space: nowrap; }
+.jv-err { font-size: 11px; color: var(--orange); white-space: nowrap; }
+
+.jv-split {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.jv-left {
+  display: flex;
+  flex: 1 1 50%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.jv-divider {
+  flex: 0 0 1px;
+  background: var(--border);
+}
+
+.jv-right {
+  flex: 1 1 50%;
+  min-width: 0;
+  min-height: 0;
+  padding: 8px 0;
+  font-family: Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  background: var(--panel);
+}
+
+.jv-row {
+  display: flex;
+  align-items: baseline;
+  padding-right: 12px;
+  white-space: nowrap;
+}
+
+.jv-row:hover { background: var(--accent-soft); }
+
+.jv-d0 { padding-left: 8px; }
+.jv-d1 { padding-left: 24px; }
+.jv-d2 { padding-left: 40px; }
+.jv-d3 { padding-left: 56px; }
+.jv-d4 { padding-left: 72px; }
+.jv-d5 { padding-left: 88px; }
+.jv-d6 { padding-left: 104px; }
+.jv-d7 { padding-left: 120px; }
+.jv-d8 { padding-left: 136px; }
+
+.jv-toggle {
+  flex: 0 0 16px;
+  width: 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.jv-leaf { cursor: default; }
+.jv-key { color: #6ea8fe; }
+.jv-colon { color: var(--text-2); margin-right: 6px; }
+.jv-brace { color: var(--text); }
+.jv-str { color: #a5d6a7; }
+.jv-num { color: #f78c6c; }
+.jv-bool, .jv-null { color: #c792ea; }
+.jv-val { color: var(--text); }
+.jv-count { margin-left: 8px; color: var(--text-2); font-size: 10px; }
+.jv-more, .jv-fail { padding: 10px 14px; color: var(--text-2); font-size: 12px; }
+.jv-fail p { margin: 0 0 6px; }

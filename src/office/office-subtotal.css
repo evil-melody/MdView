@@ -1,0 +1,291 @@
+/* 分类汇总大纲控件：左侧行头槽的折叠柄 + 左上角级别按钮。
+ * 仅承载本功能新增的静态样式；动态定位一律用 :style，不在此写内联模板 style。 */
+
+/* 左上角级别按钮（1/2/3）：点击批量折叠/展开分组明细行 */
+.ov-outline-levels {
+  position: absolute;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  background: var(--panel-3);
+  border-right: 1px solid var(--border-2);
+  border-bottom: 1px solid var(--border-2);
+  box-sizing: border-box;
+}
+.ov-outline-levels button {
+  width: 12px;
+  height: 16px;
+  line-height: 14px;
+  padding: 0;
+  font-size: 10px;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.ov-outline-levels button:hover { background: var(--panel); }
+.ov-outline-levels .ov-lvl-on {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+/* 小计行：行号右移，给折叠柄留位 */
+.ov-row-head-sub { justify-content: flex-start; padding-left: 16px; }
+
+/* 每组小计行旁的 +/- 折叠柄 */
+.ov-outline-toggle {
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 12px;
+  height: 12px;
+  line-height: 10px;
+  padding: 0;
+  font-size: 11px;
+  text-align: center;
+  color: var(--text-2);
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  border-radius: 2px;
+  cursor: pointer;
+  z-index: 4;
+  user-select: none;
+}
+.ov-outline-toggle:hover { background: var(--panel-3); }
+.ov-outline-toggle.ov-collapsed { color: var(--accent-2); }
+
+/* ===== Office 对话框（分类汇总 / 数据透视表）：全部自绘控件，无原生 select/checkbox ===== */
+
+/* 通用勾选方块（筛选面板与对话框共用）：css 边框方块，选中态画 ✓ */
+.ov-chk {
+  position: relative;
+  flex: none;
+  width: 13px;
+  height: 13px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-2, #b8b8b8);
+  border-radius: 3px;
+  background: var(--input-bg, #fff);
+}
+.ov-chk-on { background: var(--accent, #5b6ee1); border-color: var(--accent, #5b6ee1); }
+.ov-chk-on::after {
+  content: '';
+  position: absolute;
+  left: 3.5px;
+  top: 0.5px;
+  width: 4px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* 模态对话框壳 */
+.ov-dlg-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.32);
+}
+.ov-dlg {
+  width: 430px;
+  max-width: calc(100vw - 48px);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel, #fff);
+  border: 1px solid var(--border, #ccc);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+  color: var(--text, #222);
+  font-size: 12px;
+}
+.ov-dlg-title { padding: 12px 16px; border-bottom: 1px solid var(--border, #e5e5e5); font-size: 13px; font-weight: 600; flex: none; }
+.ov-dlg-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+.ov-dlg-label { color: var(--text-2, #666); font-size: 11px; margin-bottom: 4px; }
+.ov-dlg-row { display: flex; flex-direction: column; }
+.ov-dlg-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border, #e5e5e5); flex: none; }
+.ov-dlg-btn {
+  min-width: 72px;
+  padding: 6px 14px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 4px;
+  background: var(--panel, #fff);
+  color: var(--text, #222);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ov-dlg-btn:hover { background: var(--panel-3, #f3f3f3); }
+.ov-dlg-ok { background: var(--accent, #5b6ee1); border-color: var(--accent, #5b6ee1); color: #fff; }
+.ov-dlg-ok:hover { filter: brightness(1.06); }
+.ov-dlg-ok:disabled { opacity: 0.5; cursor: default; filter: none; }
+
+/* 自绘下拉（button + 弹出列表，替代原生 select） */
+.ov-dd { position: relative; }
+.ov-dd-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 4px;
+  background: var(--input-bg, #fff);
+  color: var(--text, #222);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ov-dd-btn:hover { border-color: var(--accent, #5b6ee1); }
+.ov-dd-cur { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-dd-arrow { color: var(--text-2, #666); font-size: 10px; flex: none; }
+.ov-dd-back { position: fixed; inset: 0; z-index: 1; }
+.ov-dd-pop {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  z-index: 2;
+  max-height: 180px;
+  overflow-y: auto;
+  background: var(--panel, #fff);
+  border: 1px solid var(--border, #ccc);
+  border-radius: 5px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+}
+.ov-dd-item {
+  display: block;
+  width: 100%;
+  padding: 5px 9px;
+  border: 0;
+  background: transparent;
+  color: var(--text, #222);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.ov-dd-item:hover { background: var(--accent-soft, #eef1ff); }
+.ov-dd-on { background: var(--accent-soft, #eef1ff); color: var(--accent-2, #3d4fb8); font-weight: 600; }
+
+/* 勾选清单（选定汇总项） */
+.ov-sub-list {
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border, #e5e5e5);
+  border-radius: 5px;
+}
+.ov-sub-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text, #222);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.ov-sub-row:hover { background: var(--accent-soft, #eef1ff); }
+.ov-sub-row-dis { opacity: 0.45; cursor: default; }
+.ov-sub-row-dis:hover { background: transparent; }
+
+/* 数据透视表字段面板 */
+.ov-pv-fields { display: flex; flex-wrap: wrap; gap: 6px; }
+.ov-pv-chip {
+  padding: 4px 10px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 12px;
+  background: var(--panel-3, #f3f3f3);
+  color: var(--text, #222);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ov-pv-chip:hover { border-color: var(--accent, #5b6ee1); background: var(--accent-soft, #eef1ff); }
+.ov-pv-zones { display: grid; grid-template-columns: 1fr 1fr 1.3fr; gap: 8px; }
+.ov-pv-zone {
+  min-height: 96px;
+  padding: 6px;
+  border: 1px dashed var(--border-2, #bbb);
+  border-radius: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.ov-pv-zone-t { color: var(--text-2, #666); font-size: 11px; font-weight: 600; }
+.ov-pv-empty { color: var(--muted, #999); font-size: 11px; }
+.ov-pv-zchip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--border, #ddd);
+  border-radius: 10px;
+  background: var(--panel, #fff);
+  font-size: 11px;
+}
+.ov-pv-zname { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-pv-agg {
+  flex: none;
+  padding: 1px 4px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 3px;
+  background: var(--panel-3, #f3f3f3);
+  color: var(--text-2, #555);
+  font-size: 10px;
+  cursor: pointer;
+}
+.ov-pv-agg:hover { border-color: var(--accent, #5b6ee1); color: var(--accent-2, #3d4fb8); }
+.ov-pv-x {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  line-height: 12px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted, #999);
+  font-size: 9px;
+  cursor: pointer;
+}
+.ov-pv-x:hover { background: var(--accent-soft, #eef1ff); color: var(--accent-2, #3d4fb8); }
+.ov-pv-note { color: var(--muted, #999); font-size: 11px; }
+
+/* 字段分配 / 聚合方式弹出菜单（fixed 定位，几何走 :style） */
+.ov-pop {
+  position: fixed;
+  z-index: 9700;
+  min-width: 104px;
+  padding: 4px;
+  background: var(--panel, #fff);
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+}
+.ov-pop-item {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text, #222);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ov-pop-item:hover { background: var(--accent-soft, #eef1ff); }
+.ov-pop-item:disabled { opacity: 0.4; cursor: default; }
+.ov-pop-item:disabled:hover { background: transparent; }

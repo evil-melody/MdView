@@ -1,0 +1,510 @@
+/* Office 三格式 Vue 视图布局。文档内容本身的排版由 OOXML 属性生成，见 docx-render.ts。 */
+
+/* ---- Word ---- */
+.ov-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--panel-2);
+}
+
+.ov-doc-root {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100%;
+  padding: 16px 0;
+  outline: none;
+}
+
+.ov-page {
+  position: relative;
+  flex: 0 0 auto;
+  margin-bottom: 16px;
+  background: #fff;
+  color: #1d2127;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+}
+
+/* 纸张宽高、页边距、默认字体与字号由 DocxMeta / sectPr 注入，CSS 不写死 */
+.ov-page .de-page-inner {
+  position: relative;
+  box-sizing: border-box;
+  overflow: visible;
+  color: #1d2127;
+}
+
+.ov-doc-root .de-p {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  tab-size: 36pt;
+  -moz-tab-size: 36pt;
+}
+.ov-doc-root .de-tbl { border-collapse: collapse; table-layout: fixed; }
+.ov-doc-root .de-tbl td { border: 1px solid #b9bdc3; }
+.ov-doc-root .de-block { position: relative; }
+.ov-doc-root .de-img-missing,
+.ov-doc-root .de-ph { display: inline-block; border: 1px dashed #b9bdc3; }
+/* text-indent 可继承：列表段设负缩进时编号不能被一起推走 */
+.ov-doc-root .de-marker { display: inline-block; text-indent: 0; white-space: pre; }
+.ov-doc-root .de-sect { height: 0; }
+.ov-doc-root img[data-media]:not([src]) { background: #eef0f5; }
+
+/* Word 查找命中高亮：CSS Custom Highlight API（只建 Range，不改 DOM，不干扰选区映射） */
+::highlight(docx-find) { background-color: #ffe58a; }
+::highlight(docx-find-cur) { background-color: #ff9d3c; color: #ffffff; }
+
+.ov-loading {
+  position: sticky;
+  bottom: 8px;
+  align-self: center;
+  padding: 5px 12px;
+  border-radius: 12px;
+  background: var(--panel-3);
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+/* ---- Excel ---- */
+/* 隐藏焦点锚：WKWebView 需可编辑焦点才派发原生 paste 事件；绝对定位+零尺寸+透明，仍可 focus */
+.ov-paste-anchor {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  outline: none;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.ov-sheet {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.ov-formula {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 30px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ov-formula-addr {
+  min-width: 58px;
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.ov-formula-input {
+  flex: 1;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+
+.ov-grid-scroll { flex: 1; min-height: 0; overflow: auto; }
+.ov-grid { position: relative; user-select: none; }
+
+.ov-corner {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  left: 0;
+  width: 42px;
+  height: 26px;
+  background: var(--panel-3);
+  border-right: 1px solid var(--border-2);
+  border-bottom: 1px solid var(--border-2);
+  cursor: pointer;
+}
+.ov-corner:hover { background: var(--accent-soft, #eef1ff); }
+.ov-corner:active { background: var(--accent, #5b6ee1); }
+/* 右下角小三角：Office 全选交叉格的视觉提示 */
+.ov-corner::after {
+  content: '';
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 0;
+  height: 0;
+  border: 4px solid transparent;
+  border-right-color: var(--text-muted, #999);
+  border-bottom-color: var(--text-muted, #999);
+}
+
+.ov-col-head,
+.ov-row-head {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel-3);
+  color: var(--text-2);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+
+.ov-col-head { height: 26px; }
+.ov-row-head { width: 42px; border-right-color: var(--border-2); }
+.ov-head-on { background: var(--accent-soft); color: var(--accent-2); }
+
+/* 列头右边界 / 行头下边界：Office 式拖拽改尺寸 */
+.ov-col-resize {
+  position: absolute;
+  right: -3px;
+  top: 0;
+  width: 7px;
+  height: 100%;
+  z-index: 4;
+  cursor: col-resize;
+}
+
+.ov-row-resize {
+  position: absolute;
+  bottom: -3px;
+  left: 0;
+  width: 100%;
+  height: 7px;
+  z-index: 4;
+  cursor: row-resize;
+}
+
+.ov-cell {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  overflow: hidden;
+  white-space: nowrap;
+  cursor: cell;
+}
+
+.ov-cell-num { justify-content: flex-end; }
+.ov-cell > span { display: block; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.ov-cell-wrap { align-items: flex-start; }
+.ov-cell-wrap > span { white-space: pre-wrap; overflow-wrap: anywhere; text-overflow: clip; }
+.ov-cell-on { z-index: 2; outline: 2px solid var(--accent); outline-offset: -2px; }
+/* 选区底纹走 .ov-range-tint 整区 overlay（盖过填充色）；inrange 不再逐格改背景 */
+.ov-range-tint { position: absolute; z-index: 2; background: var(--accent-soft); pointer-events: none; }
+
+/* 名称框：Office 式地址显示 + 输入跳转 */
+.ov-name-box {
+  width: 84px;
+  border: 0;
+  background: transparent;
+  outline: none;
+  font: inherit;
+  cursor: text;
+}
+
+.ov-name-box:focus { background: var(--panel-3); border-radius: 3px; }
+
+/* 选区外框、四条可拖动边、右下填充柄、拖动预览 */
+.ov-range-box {
+  position: absolute;
+  z-index: 8;
+  box-sizing: border-box;
+  border: 2px solid var(--accent);
+  pointer-events: none;
+}
+
+.ov-range-move { position: absolute; pointer-events: auto; cursor: move; }
+.ov-range-t { left: -4px; right: -4px; top: -4px; height: 8px; }
+.ov-range-b { left: -4px; right: -4px; bottom: -4px; height: 8px; }
+.ov-range-l { top: -4px; bottom: -4px; left: -4px; width: 8px; }
+.ov-range-r { top: -4px; bottom: -4px; right: -4px; width: 8px; }
+
+.ov-fill-handle {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 9px;
+  height: 9px;
+  box-sizing: border-box;
+  background: var(--accent);
+  border: 1px solid var(--panel, #fff);
+  pointer-events: auto;
+  cursor: crosshair;
+}
+
+.ov-range-preview {
+  position: absolute;
+  z-index: 9;
+  box-sizing: border-box;
+  border: 2px dashed var(--accent);
+  pointer-events: none;
+}
+/* 冻结窗格：钉住的行/列不透明且盖住滚过的内容 */
+.ov-cell-pin { z-index: 5; }
+.ov-cell-pin-corner { z-index: 6; }
+.ov-freeze-h { position: absolute; z-index: 7; height: 0; border-top: 2px solid var(--accent); pointer-events: none; }
+.ov-freeze-v { position: absolute; z-index: 7; width: 0; border-left: 2px solid var(--accent); pointer-events: none; }
+/* 浮动图片（xlsx drawing）：随网格滚动缩放；可编辑时命中（选中/拖动/缩放），只读禁命中 */
+.ov-dlayer { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
+.ov-drawing { position: absolute; object-fit: contain; user-select: none; cursor: move; }
+.ov-dlayer .ov-drawing { pointer-events: auto; }
+.ov-drawing.ov-drawing-ro { pointer-events: none; cursor: default; }
+/* 选中框 + 8 缩放手柄（样式对齐 Word 图片手柄 de-img-handle） */
+.ov-dsel { position: absolute; box-sizing: border-box; outline: 1px solid var(--accent); pointer-events: none; }
+.ov-dhandle { position: absolute; box-sizing: border-box; width: 9px; height: 9px; background: #fff; border: 1px solid var(--accent); border-radius: 1px; pointer-events: auto; }
+.ov-dhandle[data-dir='nw'] { left: -5px; top: -5px; cursor: nwse-resize; }
+.ov-dhandle[data-dir='n']  { left: 50%; top: -5px; margin-left: -5px; cursor: ns-resize; }
+.ov-dhandle[data-dir='ne'] { right: -5px; top: -5px; cursor: nesw-resize; }
+.ov-dhandle[data-dir='e']  { right: -5px; top: 50%; margin-top: -5px; cursor: ew-resize; }
+.ov-dhandle[data-dir='se'] { right: -5px; bottom: -5px; cursor: nwse-resize; }
+.ov-dhandle[data-dir='s']  { left: 50%; bottom: -5px; margin-left: -5px; cursor: ns-resize; }
+.ov-dhandle[data-dir='sw'] { left: -5px; bottom: -5px; cursor: nesw-resize; }
+.ov-dhandle[data-dir='w']  { left: -5px; top: 50%; margin-top: -5px; cursor: ew-resize; }
+/* 查找替换条 */
+.ov-findbar { position: absolute; top: 6px; right: 18px; z-index: 30; display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.18); }
+.ov-find-input { width: 180px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 12px; }
+.ov-find-btn { padding: 4px 8px; border: none; border-radius: 6px; background: transparent; color: var(--text); cursor: pointer; font-size: 12px; white-space: nowrap; }
+.ov-find-btn:hover { background: var(--accent-soft); }
+.ov-find-on { color: var(--accent); font-weight: 600; }
+.ov-find-count { font-size: 12px; color: var(--muted); min-width: 52px; text-align: center; }
+/* officePrompt：Tauri WebView 无 window.prompt 的替代模态输入 */
+.op-prompt-overlay { position: fixed; inset: 0; z-index: 999; display: flex; align-items: flex-start; justify-content: center; padding-top: 18vh; background: rgba(0,0,0,.32); }
+.op-prompt { width: 340px; padding: 14px 16px; background: var(--panel, #fff); border: 1px solid var(--border, #ddd); border-radius: 10px; box-shadow: 0 8px 32px rgba(0,0,0,.24); }
+.op-prompt-title { font-size: 13px; font-weight: 600; color: var(--text, #222); margin-bottom: 10px; }
+.op-prompt-input { width: 100%; box-sizing: border-box; padding: 7px 10px; border: 1px solid var(--border, #ccc); border-radius: 6px; background: var(--bg, #fff); color: var(--text, #222); font-size: 13px; outline: none; }
+.op-prompt-input:focus { border-color: var(--accent, #5b6ee1); }
+.op-prompt-area { min-height: 160px; resize: vertical; line-height: 1.6; }
+.op-prompt-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.op-prompt-btn { padding: 6px 14px; border: 1px solid var(--border, #ccc); border-radius: 6px; background: transparent; color: var(--text, #222); cursor: pointer; font-size: 13px; }
+.op-prompt-ok { background: var(--accent, #5b6ee1); border-color: var(--accent, #5b6ee1); color: #fff; }
+
+.ov-cell-input {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--input-focus-bg);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+
+.ov-sheet-tabs {
+  display: flex;
+  gap: 2px;
+  flex: 0 0 28px;
+  padding: 3px 6px;
+  overflow-x: auto;
+  border-top: 1px solid var(--border);
+  background: var(--panel-2);
+}
+
+.ov-sheet-tab {
+  padding: 2px 10px;
+  border: 0;
+  border-radius: 4px 4px 0 0;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ov-sheet-on { background: var(--panel); color: var(--text); font-weight: 600; }
+
+.ov-add-row {
+  flex: 0 0 auto;
+  padding: 2px 10px;
+  margin-right: 6px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ov-add-row:hover { border-color: var(--accent); color: var(--accent); }
+
+/* 表格右键上下文菜单（还原 Office 表格操作） */
+.ov-ctx-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+}
+.ov-ctx {
+  position: fixed;
+  min-width: 148px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
+  color: var(--text);
+  font-size: 12px;
+}
+.ov-ctx-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ov-ctx-item:hover { background: var(--accent); color: #fff; }
+.ov-ctx-sep { height: 1px; margin: 4px 2px; background: var(--border); }
+
+/* ---- PowerPoint ---- */
+.ov-slides { display: flex; flex: 1; min-height: 0; background: var(--panel-2); }
+
+.ov-slide-list {
+  flex: 0 0 96px;
+  padding: 8px 4px;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.ov-slide-thumb {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  margin-bottom: 6px;
+  padding: 4px;
+  border: 1px solid var(--border-2);
+  border-radius: 4px;
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ov-slide-num { flex: 0 0 auto; padding-left: 2px; }
+.ov-slide-thumb-view { display: block; width: 100%; }
+.ov-slide-thumb-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--border-2);
+  background: var(--panel);
+  color: var(--text-2);
+  font-size: 10px;
+}
+
+.ov-slide-on { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+
+.ov-slide-stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+}
+
+/* 外层占缩放后尺寸供 flex 居中，内层按左上角缩放；单层 transform 会让布局盒与视觉盒错位 */
+.ov-slide-frame {
+  position: relative;
+  flex: 0 0 auto;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.28);
+}
+
+/* 缩略图：宽度由外层按钮决定，高度按幻灯片比例自适应，内层按原点缩放 */
+.ov-slide-frame-auto {
+  display: block;
+  width: 100%;
+  height: auto;
+  box-shadow: none;
+}
+/* 缩略图仅作预览，内层画布绝对定位 + 缩放会盖住按钮中心，拦截真实点击；
+   置为不可交互，让外层 <button> 成为唯一点击目标（主舞台画布需保持可交互，故只作用于缩略图内） */
+.ov-slide-thumb .ov-slide-frame { pointer-events: none; }
+
+.ov-slide-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  background: #fff;
+  color: #1d2127;
+  overflow: hidden;
+}
+
+.ov-slide-el { position: absolute; box-sizing: border-box; }
+/* 文本框铺满形状；bodyPr 的 padding / 垂直锚点由内联样式给动态值 */
+.ov-slide-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  outline: none;
+  overflow: hidden;
+}
+.ov-slide-editable .ov-slide-text:hover { outline: 1px dashed var(--accent); }
+.ov-slide-para { white-space: pre-wrap; overflow-wrap: break-word; }
+.ov-slide-nowrap .ov-slide-para { white-space: pre; }
+.ov-slide-bul { display: inline-block; text-indent: 0; white-space: pre; }
+.ov-slide-fill { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; }
+.ov-slide-svg { position: absolute; left: 0; top: 0; overflow: visible; }
+.ov-slide-picbox { overflow: hidden; }
+.ov-slide-pic { position: absolute; left: 0; top: 0; object-fit: fill; }
+.ov-slide-video { position: absolute; right: 8px; bottom: 8px; padding: 2px 6px; background: rgba(0, 0, 0, 0.6); color: #fff; }
+.ov-slide-ph { display: flex; align-items: center; justify-content: center; border: 1px dashed #c7c7c7; color: #9aa0a6; }
+.ov-slide-tablebox { height: auto; }
+.ov-slide-table { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.ov-slide-table td { position: relative; padding: 0; vertical-align: top; }
+/* 表格单元格里的文本体不绝对定位，随内容撑高 */
+.ov-slide-text.ov-slide-flow { position: relative; inset: auto; min-height: 100%; }
+
+/* ---- Ribbon 联动的视图状态 ---- */
+.ov-no-grid .ov-cell { border-right-color: transparent; border-bottom-color: transparent; }
+.ov-read .ov-page { box-shadow: none; border: 0; }
+.ov-read .ov-doc-root { background: var(--panel-2); }
+
+.ov-slide-sel { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ov-browse .ov-slide-list {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+  align-content: start;
+  padding: 16px;
+  border-right: 0;
+}
+.ov-browse .ov-slide-thumb { width: 100%; height: auto; padding: 6px; font-size: 12px; }
+.ov-browse .ov-slide-num { font-size: 12px; }
+.ov-browse .ov-slide-stage { display: none; }
+.ov-present .ov-slide-list { display: none; }
+.ov-present .ov-slide-stage { background: #000; }
+.ov-present .ov-slide-canvas { box-shadow: none; }

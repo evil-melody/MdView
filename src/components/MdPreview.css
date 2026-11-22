@@ -140,3 +140,16 @@
   margin: 1em 0;
   overflow-x: auto;
 }
+
+/* KaTeX 块级公式容器：居中、可横向滚动（超宽公式不溢出裁切） */
+.md-body .md-math-block {
+  display: block;
+  text-align: center;
+  margin: 1em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+}
+.md-body .md-math-block > .katex-display {
+  margin: 0;
+}

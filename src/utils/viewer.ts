@@ -10,9 +10,9 @@ const MEDIA_EXTS: Record<string, TabViewer['type']> = {
   mp4: 'video', mov: 'video', webm: 'video', m4v: 'video'
 }
 
-const DOC_EXTS = ['docx']
-const SHEET_EXTS = ['xlsx', 'xls', 'xlsm', 'csv', 'tsv']
-const PPT_EXTS = ['pptx', 'ppt']
+const DOC_EXTS = ['doc', 'docx', 'dot', 'dotx']
+const SHEET_EXTS = ['xlsx', 'xls', 'xlsm', 'xlt', 'xltx', 'csv', 'tsv']
+const PPT_EXTS = ['pptx', 'ppt', 'pot', 'potx', 'pps', 'ppsx']
 
 /** office Markdown 枢纽编辑：docx / xlsx / pptx 读为 md，编辑后写回原格式；xls 只读 */
 export function viewerTypeFor(entry: FileEntry | null | undefined): TabViewer['type'] | null {
@@ -26,11 +26,12 @@ export function viewerTypeFor(entry: FileEntry | null | undefined): TabViewer['t
   return null
 }
 
-/** office Markdown 枢纽编辑：docx / xlsx / pptx 读为 md，编辑后写回原格式；xls 只读 */
+/** office Markdown 枢纽编辑：docx（含 .doc，内核转为 docx 打开）/ xlsx（含 .xls，内核 biffToXlsx 转换）/ pptx（含 .ppt）读为 md，编辑后写回 OOXML；csv / tsv 经表格引擎可编辑，保存写回原分隔符文本。
+ *  legacy 系（doc/dot/xls/xlt/ppt/pot/pps）内核打开时已转 OOXML 且标记 editable（protocol.ts `converted`），保存写回的是新格式字节（与原 .doc 先例一致）。 */
 export function officeEditable(entry: FileEntry | null | undefined): boolean {
   if (!entry || entry.is_dir) return false
   const ext = (entry.ext || '').toLowerCase()
-  return ext === 'docx' || ext === 'xlsx' || ext === 'pptx'
+  return ['doc', 'docx', 'dot', 'dotx', 'xlsx', 'xls', 'xlt', 'pptx', 'ppt', 'pot', 'pps', 'csv', 'tsv'].includes(ext)
 }
 
 /**

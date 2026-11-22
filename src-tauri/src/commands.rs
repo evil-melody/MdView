@@ -184,6 +184,36 @@ pub async fn read_file_as_bytes(path: String) -> Result<tauri::ipc::Response, St
     Ok(tauri::ipc::Response::new(data))
 }
 
+/// 原生图片转码：把浏览器解不了的格式（macOS 截图剪贴板 TIFF、HEIC 等）解码重编码为 PNG。
+/// 前端 WebKit 对 TIFF 无解码能力（Image/canvas 全灭），只能走这里；失败返回 Err，由调用方报错取消。
+#[tauri::command]
+pub async fn transcode_image(contents: Vec<u8>) -> Result<tauri::ipc::Response, String> {
+    let img = image::ImageReader::new(Cursor::new(&contents))
+        .with_guessed_format()
+        .map_err(|e| format!("format: {e}"))?
+        .decode()
+        .map_err(|e| format!("decode: {e}"))?;
+    let mut out = Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Png)
+        .map_err(|e| format!("encode: {e}"))?;
+    Ok(tauri::ipc::Response::new(out.into_inner()))
+}
+
+/// 文本流式预览：按字节区间读取，同样走原始字节通道。
+/// 前端用 `TextDecoder.decode(bytes, { stream: true })` 拼接，跨块的多字节 UTF-8 字符不会断开。
+#[tauri::command]
+pub async fn read_file_range(path: String, offset: u64, length: u64) -> Result<tauri::ipc::Response, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = fs::File::open(&path).map_err(|e| e.to_string())?;
+    let total = f.metadata().map_err(|e| e.to_string())?.len();
+    let start = offset.min(total);
+    f.seek(SeekFrom::Start(start)).map_err(|e| e.to_string())?;
+    let n = length.min(total - start).min(1 << 20) as usize;
+    let mut buf = vec![0u8; n];
+    f.read_exact(&mut buf).map_err(|e| e.to_string())?;
+    Ok(tauri::ipc::Response::new(buf))
+}
+
 /// 写入文件原始字节（与 `read_file_as_bytes` 对称：同样走原始字节通道，
 /// 避免大文件 base64 + JSON 序列化把 WebView 卡死）。
 #[tauri::command]

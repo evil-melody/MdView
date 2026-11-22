@@ -5,6 +5,7 @@ import { parseMarkdown, resolveLocalAssets, MDVIEW_ALLOWED_URI } from '../utils/
 import { hasRemoteRefs, localizeMdHtml } from '../utils/localize'
 import { nextFrame, splitSafeChunks } from '../utils/stream-html'
 import { htmlToMarkdown } from '../utils/htmlToMarkdown'
+import 'katex/dist/katex.min.css'
 
 const props = defineProps<{
   content: string
@@ -70,31 +71,52 @@ async function runMermaid() {
  * 流式渲染：先整份解析 + 净化（一次有界的准备工作），再分片注入，每片让出一帧，
  * 正文逐段出现，浏览器全程不掉帧，主线程不被整篇 innerHTML + 布局冻住。
  */
+/* ponytail: 按文档缓存解析 + 净化结果。切页签回到同一文档不该重跑 marked.parse /
+   DOMPurify，也不该把 5MB HTML 再分 100+ 帧逐片注入（每片一帧 ≈ 1.8s）。
+   上限：同一文档编辑中（dirty）不走缓存；升级：LRU 限制缓存文档数。 */
+const parsedCache = new Map<string, { src: string; html: string }>()
+
 async function streamRender(content: string) {
   const token = ++streamToken
-  const { html: parsed } = parseMarkdown(content)
-  let raw = parsed
-  // 远端资源本地化：仅初始加载 / 刷新后（dirty=false）触发，编辑中跳过；
-  // 结果按文档+内容缓存，同内容重复渲染不重复下载
-  if (!props.dirty && props.docPath && hasRemoteRefs(raw)) {
-    emit('localizing', true)
-    try {
-      raw = await localizeMdHtml(props.docPath, raw)
-    } catch (e) {
-      // 本地化失败按原样渲染，不阻塞预览
-      console.warn('md localize failed:', e)
+  const key = props.docPath || ''
+  const hit = key && !props.dirty ? parsedCache.get(key) : undefined
+  let safe: string
+  let cached = false
+  if (hit && hit.src === content) {
+    safe = hit.html
+    cached = true
+  } else {
+    const { html: parsed } = parseMarkdown(content)
+    let raw = parsed
+    // 远端资源本地化：仅初始加载 / 刷新后（dirty=false）触发，编辑中跳过；
+    // 结果按文档+内容缓存，同内容重复渲染不重复下载
+    if (!props.dirty && props.docPath && hasRemoteRefs(raw)) {
+      emit('localizing', true)
+      try {
+        raw = await localizeMdHtml(props.docPath, raw)
+      } catch (e) {
+        // 本地化失败按原样渲染，不阻塞预览
+        console.warn('md localize failed:', e)
+      }
+      // 内容已变（用户开始编辑 / 又打开别的文件）：loading 状态交给新一轮渲染管
+      if (token !== streamToken) return
+      emit('localizing', false)
     }
-    // 内容已变（用户开始编辑 / 又打开别的文件）：loading 状态交给新一轮渲染管
-    if (token !== streamToken) return
-    emit('localizing', false)
+    safe = DOMPurify.sanitize(resolveLocalAssets(raw, props.basePath), {
+      ALLOWED_URI_REGEXP: MDVIEW_ALLOWED_URI
+    })
+    if (key && !props.dirty) parsedCache.set(key, { src: content, html: safe })
   }
-  const safe = DOMPurify.sanitize(resolveLocalAssets(raw, props.basePath), {
-    ALLOWED_URI_REGEXP: MDVIEW_ALLOWED_URI
-  })
   fullHtml.value = safe
   const el = bodyEl.value
   if (!el) return
   el.innerHTML = ''
+  if (cached) {
+    // 复现已渲染过的文档：一次注入，不做渐进出现
+    el.innerHTML = safe
+    if (token === streamToken) await runMermaid()
+    return
+  }
   const chunks = splitSafeChunks(safe)
   for (const c of chunks) {
     if (token !== streamToken) return // 内容已变，废弃本次流式结果

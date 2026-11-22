@@ -87,7 +87,7 @@ export interface SummaryResult {
   cached: boolean
 }
 
-export type ViewTab = 'preview' | 'edit' | 'mindmap'
+export type ViewTab = 'preview' | 'edit' | 'mindmap' | 'json'
 
 export interface NewFileType {
   key: string
