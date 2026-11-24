@@ -34,6 +34,10 @@ export interface XfInfo {
 export interface SheetStyles {
   xfs: XfInfo[]
   baseFont: CellCss
+  /** fonts[0] 的原始族名（MDW/行高测量走 FontRegistry 回退链，不用 CSS 栈串） */
+  baseFontName: string
+  /** fonts[0] 的字号 pt（默认字体 = 列宽/行高度量的基准） */
+  basePt: number
 }
 
 export function parseSheetStyles(root: XEl | undefined, theme: Theme): SheetStyles {
@@ -127,5 +131,5 @@ export function parseSheetStyles(root: XEl | undefined, theme: Theme): SheetStyl
     return { numFmt: numFmts.get(id) ?? BUILTIN_FORMATS[id] ?? 'General', fontPt: font?.sz ?? f0.sz ?? 11, css, hAlign, wrap }
   })
   if (!xfs.length) xfs.push({ numFmt: 'General', fontPt: f0.sz ?? 11, css: {}, wrap: false })
-  return { xfs, baseFont }
+  return { xfs, baseFont, baseFontName: f0.name ?? 'Calibri', basePt: f0.sz ?? 11 }
 }

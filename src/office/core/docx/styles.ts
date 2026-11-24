@@ -1,7 +1,8 @@
 import { cssFont } from '../fonts'
-import type { Theme } from '../theme'
+import { resolveColor, type Theme } from '../theme'
 import { kid, kids, num, onOff, path, type XEl } from '../xml'
-import type { Border, CanonStyle, ParaDirty, ParaStyle, RunSet, RunStyle, StyleInfo } from './types'
+import { cutBasedOnCycles, missingDefaultStyles } from './postload'
+import type { Border, CanonStyle, ParaDirty, ParaStyle, RunSet, RunStyle, StyleInfo, Tag } from './types'
 
 export const HIGHLIGHT: Record<string, string> = {
   yellow: '#ffff00', green: '#00ff00', cyan: '#00ffff', magenta: '#ff00ff', blue: '#0000ff', red: '#ff0000',
@@ -34,14 +35,24 @@ export function border(el: XEl | undefined): Border | undefined | null {
 export const borderCss = (b: Border | null | undefined): string | undefined =>
   b === null ? 'none' : b ? `${b.w}pt ${b.style} ${b.color}` : undefined
 
-/** the font an rFonts element names (theme fonts resolved) */
-export function fontName(rf: XEl, theme: Theme): string | undefined {
+/**
+ * the font an rFonts element names for `script` (theme fonts resolved).
+ * ascii / hAnsi / cs 走 latin 槽（sdkjs 同构）；eastAsia 走 CJK 槽；
+ * 请求 'eastAsia' 而元素无 w:eastAsia → 回退 latin 槽（sdkjs 同规）。
+ */
+export function fontName(rf: XEl, theme: Theme, script: 'ascii' | 'hAnsi' | 'cs' | 'eastAsia' = 'ascii'): string | undefined {
+  if (script === 'eastAsia') {
+    if (rf.a.eastAsia) return rf.a.eastAsia
+    const eh = rf.a.eastAsiaTheme
+    if (eh) return eh.startsWith('major') ? theme.majorEA : theme.minorEA
+    // 无 CJK 槽 → latin 回退
+  }
   const th = rf.a.asciiTheme ?? rf.a.hAnsiTheme
   if (th) return th.startsWith('major') ? theme.major : theme.minor
   return rf.a.ascii ?? rf.a.hAnsi ?? rf.a.cs ?? rf.a.eastAsia
 }
 
-const fontOf = (rf: XEl, theme: Theme): string | undefined => cssFont(fontName(rf, theme))
+const fontOf = (rf: XEl, theme: Theme, script?: 'ascii' | 'hAnsi' | 'cs' | 'eastAsia'): string | undefined => cssFont(fontName(rf, theme, script))
 
 export function readRPr(rPr: XEl | undefined, theme: Theme): RunStyle {
   const s: RunStyle = {}
@@ -56,9 +67,19 @@ export function readRPr(rPr: XEl | undefined, theme: Theme): RunStyle {
       case 'smallCaps': s.smallCaps = onOff(c); break
       case 'vanish': s.vanish = onOff(c); break
       case 'u': s.u = c.a.val ?? 'single'; break
-      case 'color': { const col = hexColor(c.a.val); if (col) s.color = col; break }
+      case 'color': { const col = resolveColor(c, theme); if (col) s.color = col; break }
       case 'sz': { const v = num(c.a.val); if (v) s.sz = v / 2; break }
-      case 'rFonts': { const f = fontOf(c, theme); if (f) s.font = f; break }
+      case 'rFonts': {
+        const raw = fontName(c, theme)
+        const f = fontOf(c, theme)
+        if (f) s.font = f
+        if (raw) s.rfont = raw
+        // 纯 CJK 槽（无 latin 回退）：度量内核按字符集选面时用
+        const eh = c.a.eastAsiaTheme
+        const ea = c.a.eastAsia ?? (eh ? (eh.startsWith('major') ? theme.majorEA : theme.minorEA) : undefined)
+        if (ea) s.rfontEA = ea
+        break
+      }
       case 'highlight': { const h = HIGHLIGHT[c.a.val]; if (h) s.hl = h; break }
       case 'shd': { const h = shading(c); if (h) s.shd = h; break }
       case 'vertAlign': s.va = c.a.val === 'superscript' ? 'sup' : c.a.val === 'subscript' ? 'sub' : undefined; break
@@ -189,9 +210,25 @@ export function readPPr(pPr: XEl | undefined): PPrResult {
         break
       }
       case 'keepNext': ps.keepNext = onOff(c); break
+      case 'keepLines': ps.keepLines = onOff(c); break
+      case 'widowControl': ps.widow = onOff(c); break
+      case 'snapToGrid': ps.snapGrid = onOff(c); break
+      case 'autoNameSpace': ps.autoNameSpace = onOff(c); break
       case 'contextualSpacing': ps.contextual = onOff(c); break
       case 'pageBreakBefore': ps.pageBreakBefore = onOff(c); break
       case 'outlineLvl': ps.outline = num(c.a.val); break
+      case 'tabs': {
+        const list: Tag[] = []
+        for (const t of kids(c, 'tab')) {
+          const al = t.a.val
+          if (al === 'clear') continue
+          const pos = num(t.a.pos)
+          if (pos === undefined) continue
+          list.push({ pos: pos / 20, al: al as Tag['al'] | undefined, leader: t.a.leader as Tag['leader'] | undefined })
+        }
+        if (list.length) ps.tabs = list
+        break
+      }
       case 'sectPr': out.sectPr = c; break
     }
   }
@@ -239,12 +276,19 @@ interface StyleDef {
   next?: string
   quick: boolean
   hidden: boolean
+  /** w:link —— 段落样式绑定的字符样式 id（hyperlink run 走它） */
+  link?: string
 }
 
 export interface ResolvedParaStyle {
   ps: ParaStyle
   rs: RunStyle
   numPr?: NumPr
+}
+
+/** 编号层 pPr 提供者（Numbering 实例的鸭子型；StyleSheet 不直接依赖 numbering 模块） */
+export interface NumProvider {
+  level(numId: string, ilvl: number): { ps: ParaStyle; rs: RunStyle } | undefined
 }
 
 export interface CondFormat {
@@ -292,6 +336,7 @@ function readDef(s: XEl): StyleDef | undefined {
     next: kid(s, 'next')?.a.val,
     quick: !!kid(s, 'qFormat'),
     hidden: !!kid(s, 'semiHidden') || !!kid(s, 'hidden'),
+    link: kid(s, 'link')?.a.val,
   }
 }
 
@@ -302,8 +347,12 @@ export class StyleSheet {
   private tblCache = new Map<string, ResolvedTableStyle>()
   defaultPara?: string
   defaultTable?: string
+  defaultChar?: string
+  defaultHyperlink?: string
   docRs: RunStyle = {}
   docPs: ParaStyle = {}
+  /** 编号层 pPr 提供者，parser 构造 Numbering 后注入（链内应用，sdkjs 同规） */
+  private numProv?: NumProvider
 
   constructor(root: XEl | undefined, private theme: Theme) {
     if (!root) return
@@ -316,7 +365,14 @@ export class StyleSheet {
       this.defs.set(def.id, def)
       if (def.isDefault && def.type === 'paragraph') this.defaultPara = def.id
       if (def.isDefault && def.type === 'table') this.defaultTable = def.id
+      if (def.isDefault && def.type === 'character') this.defaultChar = def.id
+      const nm = def.name.toLowerCase().replace(/\s/g, '')
+      if (nm === 'hyperlink' && def.type === 'character') this.defaultHyperlink = def.id
     }
+  }
+
+  setNumbering(n: NumProvider) {
+    this.numProv = n
   }
 
   /** registers a style element added to styles.xml, or the new definition of a style that changed */
@@ -325,6 +381,37 @@ export class StyleSheet {
     if (!def) return
     this.defs.set(def.id, def)
     this.paraCache.clear()
+    this.charCache.clear()
+    this.tblCache.clear()
+  }
+
+  /**
+   * PostLoadPrepare 二段装配（P7，postload.ts 头注有完整裁决）：
+   *  ① 四个缺省样式缺失时注入并落 default 槽（Get_Pr:8117-8119 的槽位语义——
+   *     StyleId 空 → Default.Table/Paragraph/Character；Normal Table 是表距链层的
+   *     恒在来源，缺它则自定义表样式直接吃 compat 种子）；
+   *  ② 灰标法环检测，环成员 BasedOn 切断（计算面；文件面透传不动）。
+   * 调用点：DocxDocument.open()，settings.xml 解析后、任何样式计算前。
+   */
+  applyPostload() {
+    const names = [...this.defs.values()].map((d) => d.name)
+    for (const spec of missingDefaultStyles(names)) {
+      const def = readDef(spec.el)
+      if (!def) continue
+      this.defs.set(def.id, def)
+      if (def.isDefault && def.type === 'paragraph' && !this.defaultPara) this.defaultPara = def.id
+      if (def.isDefault && def.type === 'table' && !this.defaultTable) this.defaultTable = def.id
+      if (def.isDefault && def.type === 'character' && !this.defaultChar) this.defaultChar = def.id
+    }
+    const links = new Map<string, string | undefined>()
+    for (const d of this.defs.values()) links.set(d.id, d.basedOn)
+    for (const id of cutBasedOnCycles(links)) {
+      const d = this.defs.get(id)
+      if (d) d.basedOn = undefined
+    }
+    this.paraCache.clear()
+    this.charCache.clear()
+    this.tblCache.clear()
   }
 
   /** the element of paragraph style `id`: what the style says itself, nothing inherited */
@@ -335,9 +422,10 @@ export class StyleSheet {
 
   /** what paragraph style `id` gets from the styles it is based on and the document defaults, its own properties left out */
   inherited(id: string): ResolvedParaStyle {
-    const base = this.defs.get(id)?.basedOn
-    const r = base && base !== id && this.defs.has(base) ? this.para(base) : undefined
-    return { ps: merge(this.docPs, r?.ps), rs: merge(this.docRs, r?.rs) }
+    const d = this.defs.get(id)
+    const acc: ResolvedParaStyle = { ps: merge(this.docPs), rs: merge(this.docRs) }
+    if (d?.basedOn) this.calcInto(acc, d.basedOn, 'paragraph', false, new Set([id]))
+    return acc
   }
 
   /** paragraph style `id` and every paragraph style based on it, directly or not */
@@ -389,36 +477,122 @@ export class StyleSheet {
     return out
   }
 
-  para(id: string | undefined): ResolvedParaStyle {
-    const key = id ?? this.defaultPara ?? ''
+  /**
+   * sdkjs CStyles.Internal_Get_Pr（Styles.js:8238）的 TS 等价：沿 BasedOn 链递归，
+   * 先祖先、再编号层、后自身，逐层 merge 进 acc。语义逐条对齐：
+   *  - 环保护：passed 命中即返回；
+   *  - 类型过滤：Style 存在但 Type 不符 → 视为缺失；
+   *  - StyleId 空 / Style 缺失：useDefault 时并入 default 样式【自身声明】
+   *    （不是 docDefaults——那是种子层的职责；也不递归它的 BasedOn）；
+   *  - BasedOn === null：段落 / 表格不再并入 default（注释掉的 ivanova_veronica
+   *    案例）；字符并入 Default.Character 自身声明；
+   *  - BasedOn 有效：递归它，useDefault=false；
+   *  - 编号：Style.pPr 带 numPr 且 numId≠0 → 并入编号层 ps/rs；numId=0 →
+   *    清 numPr + indL=0 + indFirst=0（Word 对 numId 0 的语义）；
+   *  - 最后并入当前样式自身的 pPr/rPr（表格再叠 tblPr 面）。
+   * 调用方负责种子（docDefaults / 表格样式替代）。
+   */
+  private calcInto(acc: ResolvedParaStyle, styleId: string | undefined, type: string, useDefault: boolean, passed: Set<string>): void {
+    if (!styleId || passed.has(styleId)) return
+    passed.add(styleId)
+    let d = this.defs.get(styleId)
+    if (d && d.type !== type) d = undefined
+    if (!d) {
+      if (useDefault) {
+        const defId = type === 'paragraph' ? this.defaultPara : type === 'table' ? this.defaultTable : this.defaultChar
+        const def = defId ? this.defs.get(defId) : undefined
+        if (def) this.mergeOwn(acc, def)
+      }
+      return
+    }
+    if (!d.basedOn) {
+      // 根样式：段落/表格不叠 default；字符叠 Default.Character 自身声明
+      if (useDefault && type === 'character' && this.defaultChar && this.defaultChar !== d.id) {
+        const dc = this.defs.get(this.defaultChar)
+        if (dc && dc.type === 'character') this.mergeOwn(acc, dc)
+      }
+    } else {
+      this.calcInto(acc, d.basedOn, type, false, passed)
+    }
+    // 编号层（段落与表格型样式才生效）。sdkjs 只并 GetParaPr（Styles.js:8389）——
+    // 编号层的 rPr（项目符号字体/字号）属于 marker，绝不进段落 run 面
+    const own = readPPr(kid(d.el, 'pPr'))
+    if (own.numPr && (type === 'paragraph' || type === 'table')) {
+      if (own.numPr.numId !== '0') {
+        const lv = this.numProv?.level(own.numPr.numId, own.numPr.ilvl)
+        if (lv) acc.ps = merge(acc.ps, lv.ps)
+      } else {
+        acc.numPr = undefined
+        acc.ps.indL = 0
+        acc.ps.indFirst = 0
+      }
+    }
+    if (own.numPr && own.numPr.numId !== '0') acc.numPr = own.numPr
+    this.mergeOwn(acc, d)
+  }
+
+  /** 样式自身声明并入（pPr/rPr） */
+  private mergeOwn(acc: ResolvedParaStyle, d: StyleDef): void {
+    const p = readPPr(kid(d.el, 'pPr'))
+    acc.ps = merge(acc.ps, p.ps)
+    if (p.numPr && p.numPr.numId !== '0') acc.numPr = p.numPr
+    acc.rs = merge(acc.rs, readRPr(kid(d.el, 'rPr'), this.theme))
+  }
+
+  /**
+   * 段落样式 `id` 的计算面（Get_Pr + Internal_Get_Pr 根调用等价）。种子规则对齐
+   * Get_Pr（Styles.js:8083-8160）：
+   *  - 普通段落：docDefaults（docPs/docRs），useDefault=true；
+   *  - 表格内段落：种子 = 表格面（table() 自带 docDefaults 打底 + 表格样式链声明，
+   *    即 styletype_Table 的 Get_Pr 结果），useDefault=false —— Normal 不再作为
+   *    「缺失回退」并入，但 StyleId 缺省时仍解析为 Default.Paragraph 走完整链
+   *    （bug 31469 只把 Normal 挡在表格面之外）；
+   *  - id 缺失（普通段落）→ defaultPara 的完整链。
+   * 缓存键含种子身份（表格样式 id），不同宿主表不串。
+   */
+  para(id: string | undefined, tblSeed?: string): ResolvedParaStyle {
+    const key = `${id ?? this.defaultPara ?? ''}|${tblSeed ?? ''}`
     let r = this.paraCache.get(key)
     if (r) return r
-    r = { ps: {}, rs: {} }
-    for (const d of this.chain(key)) {
-      const p = readPPr(kid(d.el, 'pPr'))
-      r.ps = merge(r.ps, p.ps)
-      if (p.numPr) r.numPr = p.numPr
-      r.rs = merge(r.rs, readRPr(kid(d.el, 'rPr'), this.theme))
+    if (tblSeed) {
+      const ts = this.table(tblSeed)
+      r = { ps: merge(ts.ps), rs: merge(ts.rs) }
+    } else {
+      r = { ps: merge(this.docPs), rs: merge(this.docRs) }
     }
+    this.calcInto(r, id ?? this.defaultPara, 'paragraph', !tblSeed, new Set())
     this.paraCache.set(key, r)
     return r
   }
 
+  /** 字符样式 `id` 的计算面：种子空（styletype_Character 不并 Default.TextPr），链上算 */
   char(id: string | undefined): RunStyle {
     if (!id) return {}
     let r = this.charCache.get(id)
     if (r) return r
-    r = {}
-    for (const d of this.chain(id)) r = merge(r, readRPr(kid(d.el, 'rPr'), this.theme))
+    const acc: ResolvedParaStyle = { ps: {}, rs: {} }
+    this.calcInto(acc, id, 'character', true, new Set())
+    r = acc.rs
     this.charCache.set(id, r)
     return r
+  }
+
+  /**
+   * 超链接 run 的字符面 = Default.Hyperlink（sdkjs GetDefaultHyperlink，
+   * Paragraph.js:8099 HyperRun.Set_RStyle 同语义）。段落样式的 w:link 是
+   * 「字符/段落样式配对」的另一回事，不参与超链接 run，故此处不读它。
+   */
+  hyperlink(): RunStyle | undefined {
+    return this.defaultHyperlink ? this.char(this.defaultHyperlink) : undefined
   }
 
   table(id: string | undefined): ResolvedTableStyle {
     const key = id ?? this.defaultTable ?? ''
     let r = this.tblCache.get(key)
     if (r) return r
-    r = { ps: {}, rs: {}, borders: {}, cellMar: {}, cond: {} }
+    // styletype_Table 的种子是 Default.TextPr/ParaPr 的副本（Get_Pr:8122-8124），
+    // 即 docDefaults —— 表内段落经由这张面间接吃到 docDefaults
+    r = { ps: merge(this.docPs), rs: merge(this.docRs), borders: {}, cellMar: {}, cond: {} }
     for (const d of this.chain(key)) {
       r.ps = merge(r.ps, readPPr(kid(d.el, 'pPr')).ps)
       r.rs = merge(r.rs, readRPr(kid(d.el, 'rPr'), this.theme))

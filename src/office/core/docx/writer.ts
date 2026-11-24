@@ -15,6 +15,7 @@ import { Numbering } from './numbering'
 import { fixCommentMarks, markEnd, markStart, numbering as commentNumbering, writeDocxComments } from './comments'
 import type { DocxDocument, GenRun } from './parser'
 import { fontName, HIGHLIGHT, readPPr, readRPr } from './styles'
+import { planBuiltinWrite, serializeBuiltinStyle, serializeBuiltinStyles, type ExistingStyle } from './builtin'
 import type {
   Block, CanonStyle, CellSpec, Crop, EditOp, EditResult, ParaDirty, ParaSpec, ParaStyle, Paragraph, RunSet, RunStyle, SpecRun, SrcRef, StyleInfo, StyleLook, StyleSetResult,
   TableOp, TableSpec, PageSet, PageSetResult, PageSetup, HFKind, HFLine, HFSet, HFSetResult, TrackMark, WrapSpec,
@@ -196,61 +197,83 @@ function abstractXml(W: string, id: number, kind: 'bullet' | 'number'): string {
 const STYLES_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles'
 const STYLES_CT = 'application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml'
 
-/** Word's built-in look for the canonical styles (used when a document lacks them) */
-function canonDef(kind: Exclude<CanonStyle, 'normal'>, W: string): { id: string; name: string; ppr: string; rpr: string } {
-  const sz = (v: number) => `<${W}sz ${W}val="${v}"/><${W}szCs ${W}val="${v}"/>`
-  const color = (c: string) => `<${W}color ${W}val="${c}"/>`
-  if (kind === 'title')
-    return { id: 'Title', name: 'Title', ppr: `<${W}spacing ${W}after="80" ${W}line="240" ${W}lineRule="auto"/><${W}contextualSpacing/>`, rpr: `<${W}spacing ${W}val="-10"/><${W}kern ${W}val="28"/>${sz(56)}` }
-  if (kind === 'subtitle') return { id: 'Subtitle', name: 'Subtitle', ppr: `<${W}spacing ${W}after="160"/>`, rpr: `${color('5A5A5A')}<${W}spacing ${W}val="15"/>${sz(28)}` }
-  const n = Number(kind.slice(1))
-  const look: Record<number, [number, number, string, boolean]> = {
-    1: [240, 32, '2F5496', false],
-    2: [40, 26, '2F5496', false],
-    3: [40, 24, '1F3763', false],
-    4: [40, 22, '2F5496', true],
-    5: [40, 22, '2F5496', false],
-    6: [40, 22, '1F3763', true],
+/** styles part 路径（无 rel 时按 Word 惯例合成 word/styles.xml，与旧 ensureStyle 同径） */
+const stylesPath = (doc: DocxDocument): string => relOfType(doc.rels, 'styles')?.target ?? 'word/styles.xml'
+
+/**
+ * 内置样式全量写回（P8 / x22）——**单一来源**：saveDocx 与 ensureStyle 共走此路，
+ * 旧 canonDef（硬编码 Title/Heading 观感，与注册表色值/字号分歧）整删，杜绝双分页/双颜色源。
+ *
+ * 查重读 styles part 的**文件既有** (styleId ∪ 归一化名字)，而非活动视图：活动视图被
+ * postload 计算面注入了 `normal`/`NormalTable`（x21 B28/B29 锁的薄态合成 id），若按它查重，
+ * 名字命中会把注册表富态 Normal/TableNormal 误判为「已在」→ 不落文件 → 重开不收敛。文件面
+ * 才是重开时 missingDefaultStyles 查重的对象，自洽且跨多次保存幂等。
+ *
+ * 写回**字符串级插入**到根闭合前（自关闭根先展开为成对标签），既有字节零扰动——saveDocx
+ * 每次保存都跑，重排整个 part 会扰动未触碰的 styles（违 P7 透传不变式）。写回条目同时
+ * 登记进活动 StyleSheet（`add()` 只入 defs、不动 defaultPara 槽，postload 计算面默认仍在，
+ * ensureStyle 的 canonical() 据此立即命中）。
+ *
+ * 幂等闭环：首存后文件全量 → 再存文件既有覆盖全部注册表 → 写回集空 → 直接返回；重开时
+ * missingDefaultStyles 按同一归一化名字查重命中 4 缺省 → 注入集空 → 读写两侧收敛。
+ * 无 part：合成最小根并补 rel/content-type（与旧 ensureStyle 同径）。
+ */
+async function writebackBuiltins(doc: DocxDocument): Promise<void> {
+  const path = stylesPath(doc)
+  const hasPart = doc.pkg.has(path)
+  const xml = hasPart ? await doc.pkg.text(path) : ''
+  const nodes = xml.trim() ? parseRaw(xml) : []
+  const root = rootEl(nodes)
+  const W = root ? prefixOf(root.q) || 'w:' : 'w:'
+  const existing: ExistingStyle[] = []
+  if (root) {
+    for (const s of kidsOf(root, 'style')) {
+      const id = getAttr(s, 'styleId', true)
+      if (!id) continue
+      const nm = kidOf(s, 'name')
+      existing.push({ id, name: (nm ? getAttr(nm, 'val', true) : undefined) ?? id })
+    }
   }
-  const [before, size, c, italic] = look[n]
-  return {
-    id: `Heading${n}`,
-    name: `heading ${n}`,
-    ppr: `<${W}keepNext/><${W}keepLines/><${W}spacing ${W}before="${before}" ${W}after="0"/><${W}outlineLvl ${W}val="${n - 1}"/>`,
-    rpr: `${italic ? `<${W}i/><${W}iCs/>` : ''}${color(c)}${sz(size)}`,
+  const plan = planBuiltinWrite(existing)
+  if (!plan.length) return
+  const content = serializeBuiltinStyles(plan, W, doc.theme)
+  // 登记进活动视图：与落文件同径（带 theme 解析 flat hex），使本会话内引用这些内置样式的
+  // 段落即刻按富态渲染，且与重开后 StyleSheet 从文件重建的结果一致。
+  for (const e of plan) doc.styles.add(parseStyle(serializeBuiltinStyle(e, W, doc.theme), W))
+  if (!root) {
+    // 无 part / 空根：合成完整根，并按需登记 rel + content-type
+    const pfx = W.slice(0, -1) || 'w'
+    doc.pkg.setPart(path, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<${pfx}:styles xmlns:${pfx}="${WML}">${content}</${pfx}:styles>`)
+    if (!relOfType(doc.rels, 'styles')) {
+      await doc.pkg.addRel(doc.mainPath, STYLES_REL, path)
+      await doc.pkg.setContentType(path, STYLES_CT)
+      doc.rels = await doc.pkg.rels(doc.mainPath)
+    }
+    return
+  }
+  const close = `</${root.q}>`
+  const ci = xml.lastIndexOf(close)
+  if (ci >= 0) {
+    // 常规成对根：插到闭合标签前，前后字节原样保留
+    doc.pkg.setPart(path, xml.slice(0, ci) + content + xml.slice(ci))
+  } else {
+    // 自关闭根 `<x:styles .../>` → `<x:styles ...>content</x:styles>`（属性串原样搬移）
+    const q = root.q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    doc.pkg.setPart(path, xml.replace(new RegExp(`<${q}\\b([^>]*?)/>`), (_m, a: string) => `<${root.q}${a}>${content}</${root.q}>`))
   }
 }
 
-/** Id of a built-in paragraph style (Title, Heading 1…), added to styles.xml when the document lacks it. */
+/**
+ * Id of a built-in paragraph style (Title, Heading 1…), added to styles.xml when the document
+ * lacks it. 收敛后 = 全量写回的单条特例：跑一次 writebackBuiltins（文件既有缺啥补啥，含本
+ * canonical 与其 basedOn/next/link 依赖），再从 canonical() 读回注册表 id（本地化文件亦正确）。
+ */
 export async function ensureStyle(doc: DocxDocument, kind: CanonStyle): Promise<{ id: string; styles: StyleInfo[] }> {
   const have = doc.styles.canonical()[kind]
   if (have || kind === 'normal') return { id: have ?? '', styles: doc.styles.quickStyles() }
-  const rel = relOfType(doc.rels, 'styles')
-  const path = rel?.target ?? 'word/styles.xml'
-  const xml = doc.pkg.has(path)
-    ? await doc.pkg.text(path)
-    : '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"></w:styles>'
-  const nodes = parseRaw(xml)
-  const root = rootEl(nodes)!
-  const W = prefixOf(root.q)
-  const def = canonDef(kind, W)
-  let id = def.id
-  for (let i = 2; doc.styles.has(id); i++) id = def.id + i
-  const base = doc.styles.defaultPara
-  const link = base ? `<${W}basedOn ${W}val="${base}"/><${W}next ${W}val="${base}"/>` : ''
-  const styleXml =
-    `<${W}style ${W}type="paragraph" ${W}styleId="${id}"><${W}name ${W}val="${def.name}"/>${link}<${W}uiPriority ${W}val="9"/><${W}qFormat/>` +
-    `<${W}pPr>${def.ppr}</${W}pPr><${W}rPr>${def.rpr}</${W}rPr></${W}style>`
-  root.c.push(parseRaw(styleXml)[0])
-  root.self = false
-  doc.pkg.setPart(path, serialize(nodes))
-  if (!rel) {
-    await doc.pkg.addRel(doc.mainPath, STYLES_REL, path)
-    await doc.pkg.setContentType(path, STYLES_CT)
-    doc.rels = await doc.pkg.rels(doc.mainPath)
-  }
-  doc.styles.add(parseStyle(styleXml, W))
-  doc.markEdited()
+  await writebackBuiltins(doc)
+  const id = doc.styles.canonical()[kind] ?? ''
+  if (id) doc.markEdited()
   return { id, styles: doc.styles.quickStyles() }
 }
 
@@ -1395,5 +1418,8 @@ export async function saveDocx(doc: DocxDocument): Promise<Blob> {
     body = rewriteSects(body!, (sect) => applyPageSet(sect, set, page))
   }
   if (body !== undefined) doc.pkg.setPart(doc.mainPath, body)
+  // 内置样式全量写回（P8 / x22）：每次保存把文件缺失的注册表条目补进 styles part，
+  // 与 sdkjs WriteStyles 全表写回同义；已全量则写回集空、直接短路。
+  await writebackBuiltins(doc)
   return doc.pkg.save(DOCX_MIME)
 }

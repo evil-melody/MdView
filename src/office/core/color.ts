@@ -1,5 +1,5 @@
 import { kid, kids, num, type XEl } from './xml'
-import type { Theme } from './theme'
+import { applyMods as applyModsByte, applySheetTint, hslToRgb01, type Theme } from './theme'
 
 export type RGB = [number, number, number]
 
@@ -14,53 +14,75 @@ export function rgbToHex([r, g, b]: RGB): string {
   return '#' + c(r) + c(g) + c(b)
 }
 
-export function rgbToHsl([r, g, b]: RGB): [number, number, number] {
-  r /= 255
-  g /= 255
-  b /= 255
-  const max = Math.max(r, g, b)
-  const min = Math.min(r, g, b)
-  const l = (max + min) / 2
-  if (max === min) return [0, 0, l]
-  const d = max - min
-  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
-  let h = 0
-  if (max === r) h = (g - b) / d + (g < b ? 6 : 0)
-  else if (max === g) h = (b - r) / d + 2
-  else h = (r - g) / d + 4
-  return [h / 6, s, l]
-}
+// HSL 换算不再在本文件另开一套（曾经这里是 0..1 值域 + Math.round，与
+// theme.ts 的 sdkjs 字节管线并存，同一颜色两条路会出差值）。对外签名保留
+// 0..1 形态给 hslClr 用，内部全部经 theme.ts 的 0..255 / clampColor 实现。
 
-export function hslToRgb([h, s, l]: [number, number, number]): RGB {
-  if (s === 0) return [l * 255, l * 255, l * 255]
-  const q = l < 0.5 ? l * (1 + s) : l + s - l * s
-  const p = 2 * l - q
-  const f = (t: number) => {
-    if (t < 0) t += 1
-    if (t > 1) t -= 1
-    if (t < 1 / 6) return p + (q - p) * 6 * t
-    if (t < 1 / 2) return q
-    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6
-    return p
-  }
-  return [f(h + 1 / 3) * 255, f(h) * 255, f(h - 1 / 3) * 255]
-}
-
-const clamp01 = (x: number) => Math.max(0, Math.min(1, x))
-
-/** Excel/Word style tint (-1..1) applied in HSL luminance. */
+/** Excel tint (-1..1) —— 复用 theme.ts 的 HSL 亮度族运算（0..255 值域 + clampColor） */
 export function applyTint(hex: string, tint: number): string {
   if (!tint) return hex
-  const hsl = rgbToHsl(hexToRgb(hex))
-  hsl[2] = tint < 0 ? hsl[2] * (1 + tint) : hsl[2] * (1 - tint) + tint
-  return rgbToHex(hslToRgb(hsl))
+  return rgbToHex(applySheetTint(hexToRgb(hex), tint))
 }
 
-const PRESET: Record<string, string> = {
-  black: '#000000', white: '#ffffff', red: '#ff0000', green: '#008000', blue: '#0000ff', yellow: '#ffff00',
-  cyan: '#00ffff', magenta: '#ff00ff', gray: '#808080', grey: '#808080', ltGray: '#d3d3d3', dkGray: '#a9a9a9',
-  orange: '#ffa500', purple: '#800080', navy: '#000080', maroon: '#800000', olive: '#808000', teal: '#008080',
-  silver: '#c0c0c0', lime: '#00ff00', pink: '#ffc0cb', brown: '#a52a2a', gold: '#ffd700',
+// ECMA-376 ST_PresetColorVal 全表 —— 逐条取自 sdkjs map_prst_color
+// （common/Drawings/Format/Format.js:1720-1910，共 190 项）。
+// 旧实现只挂了 24 项子集，未命中的预设名（darkRed / royalBlue / hotPink …）
+// 一律被兜成黑色；现在未命中返回 undefined，由调用方决定是否回退。
+const PRST_RAW = (
+  'aliceBlue f0f8ff antiqueWhite faebd7 aqua 00ffff aquamarine 7fffd4 azure f0ffff ' +
+  'beige f5f5dc bisque ffe4c4 black 000000 blanchedAlmond ffebcd blue 0000ff ' +
+  'blueViolet 8a2be2 brown a52a2a burlyWood deb887 cadetBlue 5f9ea0 chartreuse 7fff00 ' +
+  'chocolate d2691e coral ff7f50 cornflowerBlue 6495ed cornsilk fff8dc crimson dc143c ' +
+  'cyan 00ffff darkBlue 00008b darkCyan 008b8b darkGoldenrod b8860b darkGray a9a9a9 ' +
+  'darkGreen 006400 darkGrey a9a9a9 darkKhaki bdb76b darkMagenta 8b008b darkOliveGreen 556b2f ' +
+  'darkOrange ff8c00 darkOrchid 9932cc darkRed 8b0000 darkSalmon e9967a darkSeaGreen 8fbc8f ' +
+  'darkSlateBlue 483d8b darkSlateGray 2f4f4f darkSlateGrey 2f4f4f darkTurquoise 00ced1 darkViolet 9400d3 ' +
+  'deepPink ff1493 deepSkyBlue 00bfff dimGray 696969 dimGrey 696969 dkBlue 00008b ' +
+  'dkCyan 008b8b dkGoldenrod b8860b dkGray a9a9a9 dkGreen 006400 dkGrey a9a9a9 ' +
+  'dkKhaki bdb76b dkMagenta 8b008b dkOliveGreen 556b2f dkOrange ff8c00 dkOrchid 9932cc ' +
+  'dkRed 8b0000 dkSalmon e9967a dkSeaGreen 8fbc8b dkSlateBlue 483d8b dkSlateGray 2f4f4f ' +
+  'dkSlateGrey 2f4f4f dkTurquoise 00ced1 dkViolet 9400d3 dodgerBlue 1e90ff firebrick b22222 ' +
+  'floralWhite fffaf0 forestGreen 228b22 fuchsia ff00ff gainsboro dcdcdc ghostWhite f8f8ff ' +
+  'gold ffd700 goldenrod daa520 gray 808080 green 008000 greenYellow adff2f ' +
+  'grey 808080 honeydew f0fff0 hotPink ff69b4 indianRed cd5c5c indigo 4b0082 ' +
+  'ivory fffff0 khaki f0e68c lavender e6e6fa lavenderBlush fff0f5 lawnGreen 7cfc00 ' +
+  'lemonChiffon fffacd lightBlue add8e6 lightCoral f08080 lightCyan e0ffff lightGoldenrodYellow fafad2 ' +
+  'lightGray d3d3d3 lightGreen 90ee90 lightGrey d3d3d3 lightPink ffb6c1 lightSalmon ffa07a ' +
+  'lightSeaGreen 20b2aa lightSkyBlue 87cefa lightSlateGray 778899 lightSlateGrey 778899 lightSteelBlue b0c4de ' +
+  'lightYellow ffffe0 lime 00ff00 limeGreen 32cd32 linen faf0e6 ltBlue add8e6 ' +
+  'ltCoral f08080 ltCyan e0ffff ltGoldenrodYellow fafa78 ltGray d3d3d3 ltGreen 90ee90 ' +
+  'ltGrey d3d3d3 ltPink ffb6c1 ltSalmon ffa07a ltSeaGreen 20b2aa ltSkyBlue 87cefa ' +
+  'ltSlateGray 778899 ltSlateGrey 778899 ltSteelBlue b0c4de ltYellow ffffe0 magenta ff00ff ' +
+  'maroon 800000 medAquamarine 66cdaa medBlue 0000cd mediumAquamarine 66cdaa mediumBlue 0000cd ' +
+  'mediumOrchid ba55d3 mediumPurple 9370db mediumSeaGreen 3cb371 mediumSlateBlue 7b68ee mediumSpringGreen 00fa9a ' +
+  'mediumTurquoise 48d1cc mediumVioletRed c71585 medOrchid ba55d3 medPurple 9370db medSeaGreen 3cb371 ' +
+  'medSlateBlue 7b68ee medSpringGreen 00fa9a medTurquoise 48d1cc medVioletRed c71585 midnightBlue 191970 ' +
+  'mintCream f5fffa mistyRose ffe4ff moccasin ffe4b5 navajoWhite ffdead navy 000080 ' +
+  'oldLace fdf5e6 olive 808000 oliveDrab 6b8e23 orange ffa500 orangeRed ff4500 ' +
+  'orchid da70d6 paleGoldenrod eee8aa paleGreen 98fb98 paleTurquoise afeeee paleVioletRed db7093 ' +
+  'papayaWhip ffefd5 peachPuff ffdab9 peru cd853f pink ffc0cb plum d3a0d3 ' +
+  'powderBlue b0e0e6 purple 800080 red ff0000 rosyBrown bc8f8f royalBlue 4169e1 ' +
+  'saddleBrown 8b4513 salmon fa8072 sandyBrown f4a460 seaGreen 2e8b57 seaShell fff5ee ' +
+  'sienna a0522d silver c0c0c0 skyBlue 87ceeb slateBlue 6a5aeb slateGray 708090 ' +
+  'slateGrey 708090 snow fffafa springGreen 00ff7f steelBlue 4682b4 tan d2b48c ' +
+  'teal 008080 thistle d8bfd8 tomato ff7347 turquoise 40e0d0 violet ee82ee ' +
+  'wheat f5deb3 white ffffff whiteSmoke f5f5f5 yellow ffff00 yellowGreen 9acd32'
+)
+  .split(' ')
+  .reduce((m, v, i, a) => { if (i % 2 === 0) return m; m[a[i - 1]] = '#' + v; return m }, {} as Record<string, string>)
+
+export const PRESET: Record<string, string> = PRST_RAW
+
+/** 大小写不敏感索引（XML 预设名按 ECMA 是 camelCase，容错实际文件里的乱写） */
+const PRST_CI: Record<string, string> = Object.keys(PRST_RAW).reduce(
+  (m, k) => ((m[k.toLowerCase()] = PRST_RAW[k]), m),
+  {} as Record<string, string>,
+)
+
+/** 预设色查表：精确 → 全小写归一 */
+export function presetColor(val: string | undefined): string | undefined {
+  if (!val) return undefined
+  return PRST_RAW[val] ?? PRST_CI[val.toLowerCase()]
 }
 
 export interface ColorCtx {
@@ -86,7 +108,7 @@ export function drawingColor(el: XEl, ctx: ColorCtx): string | undefined {
       hex = '#' + (el.a.lastClr ?? (el.a.val === 'window' ? 'ffffff' : '000000'))
       break
     case 'prstClr':
-      hex = PRESET[el.a.val] ?? '#000000'
+      hex = presetColor(el.a.val)
       break
     case 'scrgbClr':
       hex = rgbToHex([
@@ -96,7 +118,7 @@ export function drawingColor(el: XEl, ctx: ColorCtx): string | undefined {
       ])
       break
     case 'hslClr':
-      hex = rgbToHex(hslToRgb([(num(el.a.hue) ?? 0) / 21600000, (num(el.a.sat) ?? 0) / 100000, (num(el.a.lum) ?? 0) / 100000]))
+      hex = rgbToHex(hslToRgb01((num(el.a.hue) ?? 0) / 21600000, (num(el.a.sat) ?? 0) / 100000, (num(el.a.lum) ?? 0) / 100000))
       break
     case 'schemeClr': {
       const v = el.a.val
@@ -114,52 +136,15 @@ export function drawingColor(el: XEl, ctx: ColorCtx): string | undefined {
 
 function applyMods(hex: string, el: XEl): string {
   if (!el.c.length) return hex
-  let rgb = hexToRgb(hex)
-  let alpha = 1
-  for (const m of el.c) {
-    const v = (num(m.a.val) ?? 0) / 100000
-    switch (m.n) {
-      case 'alpha':
-        alpha = v
-        break
-      case 'lumMod': {
-        const hsl = rgbToHsl(rgb)
-        hsl[2] = clamp01(hsl[2] * v)
-        rgb = hslToRgb(hsl)
-        break
-      }
-      case 'lumOff': {
-        const hsl = rgbToHsl(rgb)
-        hsl[2] = clamp01(hsl[2] + v)
-        rgb = hslToRgb(hsl)
-        break
-      }
-      case 'satMod': {
-        const hsl = rgbToHsl(rgb)
-        hsl[1] = clamp01(hsl[1] * v)
-        rgb = hslToRgb(hsl)
-        break
-      }
-      case 'tint':
-        rgb = rgb.map((c) => c + (255 - c) * (1 - v)) as RGB
-        break
-      case 'shade':
-        rgb = rgb.map((c) => c * v) as RGB
-        break
-      case 'inv':
-        rgb = rgb.map((c) => 255 - c) as RGB
-        break
-      case 'gray': {
-        const g = rgb[0] * 0.3 + rgb[1] * 0.59 + rgb[2] * 0.11
-        rgb = [g, g, g]
-        break
-      }
-    }
-  }
-  const out = rgbToHex(rgb)
-  if (alpha >= 1) return out
-  const [r, g, b] = hexToRgb(out)
-  return `rgba(${r},${g},${b},${+alpha.toFixed(3)})`
+  // 统一走 theme.ts 的 sdkjs 字节管线（0..255 HSL + clampColor + 伽马往返的
+  // tint/shade/inv），本文件不再维护第二套 0..1 近似实现
+  const out = applyModsByte(hexToRgb(hex), el.c)
+  const alpha = el.c.find((m) => m.n === 'alpha')
+  const a = alpha ? (num(alpha.a.val) ?? 100000) / 100000 : 1
+  const rgbHex = rgbToHex(out)
+  if (a >= 1) return rgbHex
+  const [r, g, b] = hexToRgb(rgbHex)
+  return `rgba(${r},${g},${b},${+a.toFixed(3)})`
 }
 
 /** First color child of a fill-ish element (solidFill, fgClr, …). */

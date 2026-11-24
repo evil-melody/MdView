@@ -6,7 +6,8 @@
  * 这些属性是文档内容的一部分，不是组件样式；样式字符串随 OOXML 属性动态生成。
  */
 import type { Block, FmtChange, Inline, Paragraph, ParaStyle, RunStyle, Table, TableRow, TrackMark, WrapSpec } from './core/docx/types'
-import type { RowFrag } from './view/docx/paginate'
+import type { ParaFrag, RowFrag } from './view/docx/paginate'
+import { lineSlices } from './view/docx/lines'
 import { fmtChangeDesc, fmtChangeEmpty } from './view/docx/fmtchange'
 import { pprChangeDesc, stateOf } from './view/docx/pprchange'
 import { safeHref } from './core/url'
@@ -82,13 +83,14 @@ function contextual(p?: Block, prev?: Block, next?: Block): Spacing {
   return (b + a) as Spacing
 }
 
-function paraCss(ps: ParaStyle, sp: Spacing): string {
-  const out: string[] = [`line-height:${lineHeight(ps)}`]
+/** lined = 行级片段渲染：行高/首行缩进挪到行 div，容器不再声明（否则每行都吃首行缩进） */
+function paraCss(ps: ParaStyle, sp: Spacing, lined = false): string {
+  const out: string[] = lined ? [] : [`line-height:${lineHeight(ps)}`]
   if (!sp.includes('b') && ps.before) out.push(`padding-top:${pt(ps.before)}`)
   if (!sp.includes('a') && ps.after) out.push(`padding-bottom:${pt(ps.after)}`)
   if (ps.indL) out.push(`padding-left:${pt(ps.indL)}`)
   if (ps.indR) out.push(`padding-right:${pt(ps.indR)}`)
-  if (ps.indFirst) out.push(`text-indent:${pt(ps.indFirst)}`)
+  if (ps.indFirst && !lined) out.push(`text-indent:${pt(ps.indFirst)}`)
   if (ps.align) out.push(`text-align:${ps.align}`)
   if (ps.shd) out.push(`background:${ps.shd}`)
   const b = (x: ParaStyle['bTop']) => (x ? `${x.w}pt ${x.style} ${x.color}` : '')
@@ -107,6 +109,8 @@ export interface RenderOpts {
   offset?: number
   /** 跨页表格：绝对块下标 → 本页要渲染的行片段 */
   frags?: Record<number, RowFrag>
+  /** 行级片段（P4a）：绝对块下标 → 内核 detail；有则逐行 div，无则浏览器断行 */
+  paras?: Record<number, ParaFrag>
 }
 
 /** CSS for a floating picture (dynamic geometry from the wp:anchor wrap/position). */
@@ -133,20 +137,27 @@ function floatStyle(w: WrapSpec, iw: number, rot?: number): string {
   return rotCss ? `${base}transform:${rotCss};transform-origin:center;` : base
 }
 
+/**
+ * 文本 run 的 HTML（单一实现：整 run 渲染与行级切片共用）。
+ * [a,b) 是 run 内 UTF-16 切片区间；o 是切片起点在段落内的绝对偏移 —— 光标契约
+ * （span data-o + textContent 长度）在行级切片下仍逐段成立。
+ */
+function textHtml(x: Inline & { t: 'text' }, o: number, a: number, b: number, ctx: RenderOpts): string {
+  const fc = x.fc && !fmtChangeEmpty(x.fc.s, x.s) ? x.fc : undefined
+  const css = [runCss(x.s), x.tc ? trackCss(x.tc) : '', fc ? fmtChangeCss(fc) : ''].filter(Boolean).join(';')
+  const title = x.tc ? ` title="${esc(TRACK_TITLE[x.tc.k])}"` : fc ? ` title="${esc(fmtChangeDesc(fc.s, x.s))}"` : ''
+  const cls = fc ? ' class="de-fmt-chg"' : ''
+  // css may carry a quoted font-family: escape it or the quotes would terminate the style attribute
+  const span = `<span data-o="${o}"${cls}${css ? ` style="${esc(css)}"` : ''}${title}>${esc(x.text.slice(a, b))}</span>`
+  const href = !ctx.editable ? safeHref(x.href) : undefined
+  return href ? `<a href="${esc(href)}" target="_blank" rel="noreferrer noopener">${span}</a>` : span
+}
+
 function inlineHtml(x: Inline, o: number, ctx: RenderOpts): string {
   const obj = `data-o="${o}" data-obj=""${ctx.editable ? ' contenteditable="false"' : ''}`
   switch (x.t) {
-    case 'text': {
-      // a revision whose net diff is zero is rendered as a plain run
-      const fc = x.fc && !fmtChangeEmpty(x.fc.s, x.s) ? x.fc : undefined
-      const css = [runCss(x.s), x.tc ? trackCss(x.tc) : '', fc ? fmtChangeCss(fc) : ''].filter(Boolean).join(';')
-      const title = x.tc ? ` title="${esc(TRACK_TITLE[x.tc.k])}"` : fc ? ` title="${esc(fmtChangeDesc(fc.s, x.s))}"` : ''
-      const cls = fc ? ' class="de-fmt-chg"' : ''
-      // css may carry a quoted font-family: escape it or the quotes would terminate the style attribute
-      const span = `<span data-o="${o}"${cls}${css ? ` style="${esc(css)}"` : ''}${title}>${esc(x.text)}</span>`
-      const href = !ctx.editable ? safeHref(x.href) : undefined
-      return href ? `<a href="${esc(href)}" target="_blank" rel="noreferrer noopener">${span}</a>` : span
-    }
+    case 'text':
+      return textHtml(x, o, o, o + x.text.length, ctx)
     case 'field': {
       const v = x.kind === 'PAGE' ? (ctx.page !== undefined ? ctx.page + 1 : 1) : ctx.pages || 1
       return `<span ${obj} style="${runCss(x.s)}">${v}</span>`
@@ -178,7 +189,72 @@ function inlineHtml(x: Inline, o: number, ctx: RenderOpts): string {
   }
 }
 
-function paraHtml(p: Paragraph, pa: string | undefined, sp: Spacing, ctx: RenderOpts): string {
+/**
+ * P4a 行级渲染：内核 detail 逐行一个 div —— 断行/行高/基线全部来自排版内核，
+ * 浏览器只负责摆放已定好的行（white-space:pre 禁二次断行）。
+ * 基线定位：::before strut 高 = L.a（inline-block 基线在其底边 → 行基线距顶恰为 a）。
+ * justify：非末行 text-align-last:justify 让浏览器摊 slack（分母口径差记残留，P4b 内核回写）。
+ * 光标契约不变：行内 span 仍带绝对 data-o，posFromDom/domFromPos 的 querySelectorAll 游走跨行成立。
+ */
+function linedHtml(p: Paragraph, pa: string | undefined, sp: Spacing, ctx: RenderOpts, frag: ParaFrag): string {
+  const pc = p.pc
+  let css = paraCss(p.ps, sp, true)
+  // 空段撑高来源 = 段尾标记度量（内核 endFace）：容器带上标记字号/族
+  if (!p.runs.length) {
+    if (p.markSz) css += `${css ? ';' : ''}font-size:${pt(p.markSz)}`
+    if (p.markFont) css += `;font-family:${p.markFont}`
+  }
+  if (pc) css += `${css ? ';' : ''}border-left:2px solid ${authorColor(pc.author)}`
+  const cls = pc ? ' class="de-p de-ppr-chg de-lined"' : ' class="de-p de-lined"'
+  const title = pc ? ` title="${esc(pprChangeDesc(pc.old.st, stateOf(p)))}"` : ''
+  const ce = ctx.editable && pa === undefined ? ' contenteditable="false"' : ''
+  const hang = p.ps.indFirst && p.ps.indFirst < 0 ? -p.ps.indFirst : 0
+  // run 起点绝对偏移表（与 paraHtml 同一游走节奏）
+  const offs: number[] = []
+  {
+    let o = 0
+    for (const x of p.runs) { offs.push(o); o += x.t === 'text' ? x.text.length : 1 }
+  }
+  const markerSpan = p.marker
+    ? `<span class="de-marker"${ctx.editable ? ' contenteditable="false"' : ''} style="${p.marker.tab && hang ? `min-width:${hang}pt;` : ''}${runCss(p.marker.s)}">${esc(p.marker.text)}${p.marker.tab && !hang ? '\t' : ''}</span>`
+    : ''
+  const slices = lineSlices(p, frag.lines)
+  const rows = frag.lines.map((L, k) => {
+    const sl = slices[k]
+    const isLast = !!frag.tail && k === frag.lines.length - 1
+    const st = [
+      `height:${pt(L.h)}`,
+      `line-height:${pt(L.h)}`,
+      k === 0 && p.ps.indFirst ? `text-indent:${pt(p.ps.indFirst)}` : '',
+      k > 0 && hang ? `padding-left:${pt(hang)}` : '',
+      p.ps.align === 'justify' && !isLast ? 'text-align:justify;text-align-last:justify' : '',
+    ].filter(Boolean).join(';')
+    const inner: string[] = []
+    if (sl.marker && k === 0 && markerSpan) inner.push(markerSpan)
+    for (let ri = 0; ri < p.runs.length; ri++) {
+      const x = p.runs[ri]
+      const rs = offs[ri]
+      const re = rs + (x.t === 'text' ? x.text.length : 1)
+      const a = Math.max(rs, sl.ds)
+      const b = Math.min(re, sl.de)
+      if (b <= a) continue
+      inner.push(x.t === 'text' ? textHtml(x, a, a - rs, b - rs, ctx) : inlineHtml(x, rs, ctx))
+    }
+    if (!inner.length && ctx.editable && pa !== undefined) inner.push(`<span data-o="${sl.ds}" data-empty="">&#8203;</span>`)
+    return `<div class="de-line" style="${st}">${inner.join('')}</div>`
+  })
+  return `<div${cls}${pa !== undefined ? ` data-pa="${pa}"` : ''}${ce}${css ? ` style="${css}"` : ''}${title}>${rows.join('')}</div>`
+}
+
+/** square/tight 这类 float 环绕图：行 div 会把浮动困在本行 BFC 里（旧行为是段落级环绕）→ 整段回退浏览器断行 */
+function hasFlowWrapFloat(p: Paragraph): boolean {
+  return p.runs.some(
+    (x) => x.t === 'img' && !!x.wrap && x.wrap.kind !== 'behindDoc' && x.wrap.kind !== 'inFrontOfText',
+  )
+}
+
+function paraHtml(p: Paragraph, pa: string | undefined, sp: Spacing, ctx: RenderOpts, frag?: ParaFrag): string {
+  if (frag && frag.lines.length && !hasFlowWrapFloat(p)) return linedHtml(p, pa, sp, ctx, frag)
   const hang = p.ps.indFirst && p.ps.indFirst < 0 ? -p.ps.indFirst : 0
   const visible = p.runs.length > 0
   let css = paraCss(p.ps, sp)
@@ -263,7 +339,7 @@ export function blocksHtml(blocks: Block[], ctx: RenderOpts, nested = false): st
     .map((b, i) => {
       const bi = base + i
       let html: string
-      if (b.t === 'p') html = paraHtml(b, nested ? undefined : `${bi}`, contextual(b, blocks[i - 1], blocks[i + 1]), ctx)
+      if (b.t === 'p') html = paraHtml(b, nested ? undefined : `${bi}`, contextual(b, blocks[i - 1], blocks[i + 1]), ctx, nested ? undefined : ctx.paras?.[bi])
       else if (b.t === 'tbl') {
         // 顶层表格内段落仍要可编辑；嵌套表格整体只读。跨页时按 frags 渲染本页行片段
         const t = tableHtml(b, nested ? undefined : `${bi}`, ctx, nested ? undefined : ctx.frags?.[bi])
@@ -275,12 +351,3 @@ export function blocksHtml(blocks: Block[], ctx: RenderOpts, nested = false): st
     .join('')
 }
 
-/** 流式到达时的高度估算，保证首屏就能分页，不必等 DOM 测量 */
-export function estimateHeight(b: Block): number {
-  if (b.t === 'p') {
-    const len = b.runs.reduce((n, r) => n + (r.t === 'text' ? r.text.length : 1), 0)
-    return Math.max(18, Math.ceil(len / 90) * 19 + (b.ps.before ?? 0) + (b.ps.after ?? 0))
-  }
-  if (b.t === 'tbl') return b.rows.length * 27 + 10
-  return 0
-}

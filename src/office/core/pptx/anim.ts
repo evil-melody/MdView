@@ -50,6 +50,30 @@ function presetFrom(clsRaw: string | undefined, idRaw: string | undefined): { pr
 
 // ---------------------------------------------------------------- 解析（XEl / parser 侧）
 
+/**
+ * parseTimeValue（Timing.js:162-174）：非串 → Unspecified（undefined）；
+ * 'indefinite' → Indefinite（MAX_SAFE_INTEGER，此处归 Infinity）；否则 parseInt。
+ */
+export function parseTimeValue(val: string | undefined): number | undefined {
+  if (typeof val !== 'string') return undefined
+  if (val === 'indefinite') return Infinity
+  const n = parseInt(val, 10)
+  return Number.isNaN(n) ? undefined : n
+}
+
+/** 首个 stCondLst/cond@delay（XEl 子树，文档顺序） */
+function firstCondDelayX(n: XEl): string | undefined {
+  for (const c of n.c) {
+    if (c.n === 'stCondLst') {
+      const cond = c.c.find((k) => k.n === 'cond')
+      if (cond) return cond.a.delay
+    }
+    const d = firstCondDelayX(c)
+    if (d !== undefined) return d
+  }
+  return undefined
+}
+
 function walkXEls(n: XEl, visit: (x: XEl) => boolean): boolean {
   for (const c of n.c) {
     if (visit(c)) return true
@@ -58,7 +82,9 @@ function walkXEls(n: XEl, visit: (x: XEl) => boolean): boolean {
   return false
 }
 
-/** 在子树内按文档顺序收集所有带 presetClass 的 cTn（命中后不再下钻同一效果细节） */
+/** 在子树内按文档顺序收集所有带 presetClass 的 cTn（命中后不再下钻同一效果细节）。
+ *  dur = clickEffect 自身 @dur（有限值），缺省取子树内最大有限 dur（行为 cTn 的真实时长）；
+ *  delay = 首个 stCondLst/cond@delay。二者走 parseTimeValue（indefinite→Infinity、缺省→undefined）。 */
 function collectEffectsX(n: XEl, out: AnimSeqItem[]): void {
   for (const c of n.c) {
     if (c.n === 'cTn' && c.a.presetClass) {
@@ -66,13 +92,20 @@ function collectEffectsX(n: XEl, out: AnimSeqItem[]): void {
       // 只建模 entr / emph / exit；path（motion path）/ mediacall 等跳过，不误收成入场动画
       if (cls === 'entr' || cls === 'emph' || cls === 'exit') {
         let spid: number | undefined
+        let maxDur = 0
         walkXEls(c, (x) => {
-          if (x.n === 'spTgt' && x.a.spid) { spid = Number(x.a.spid); return true }
+          if (spid === undefined && x.n === 'spTgt' && x.a.spid) spid = Number(x.a.spid)
+          if (x.n === 'cTn') {
+            const d = parseTimeValue(x.a.dur)
+            if (d !== undefined && d !== Infinity && d > maxDur) maxDur = d
+          }
           return false
         })
         if (spid !== undefined) {
           const hit = presetFrom(cls, c.a.presetID)
-          out.push({ spid, preset: hit.preset, cls: hit.cls })
+          const own = parseTimeValue(c.a.dur)
+          const dur = own !== undefined && own !== Infinity ? own : maxDur || undefined
+          out.push({ spid, preset: hit.preset, cls: hit.cls, dur, delay: parseTimeValue(firstCondDelayX(c)) })
         }
       }
       return
@@ -116,6 +149,19 @@ export function parseTransitionX(root: XEl | undefined): string | undefined {
 
 // ---------------------------------------------------------------- 解析（RNode / 写回侧）
 
+/** 首个 stCondLst/cond@delay（RNode 子树，文档顺序） */
+function firstCondDelayR(n: RNode): string | undefined {
+  for (const c of kidsOf(n)) {
+    if (local(c.q) === 'stCondLst') {
+      const cond = kidsOf(c).find((k) => local(k.q) === 'cond')
+      if (cond) return getAttr(cond, 'delay')
+    }
+    const d = firstCondDelayR(c)
+    if (d !== undefined) return d
+  }
+  return undefined
+}
+
 /** 解析当前 slide XML 的动画列表（保持 mainSeq clickEffect 时序顺序） */
 export function timingListOf(nodes: RChild[]): AnimSeqItem[] {
   const timing = kidsOf(rootEl(nodes), 'timing')[0]
@@ -136,13 +182,20 @@ export function timingListOf(nodes: RChild[]): AnimSeqItem[] {
         const cls = getAttr(c, 'presetClass')
         if (cls === 'entr' || cls === 'emph' || cls === 'exit') {
           let spid: string | undefined
+          let maxDur = 0
           walkOoxml(c, (x) => {
-            if (local(x.q) === 'spTgt') { spid = getAttr(x, 'spid'); return true }
+            if (spid === undefined && local(x.q) === 'spTgt') spid = getAttr(x, 'spid')
+            if (local(x.q) === 'cTn') {
+              const d = parseTimeValue(getAttr(x, 'dur'))
+              if (d !== undefined && d !== Infinity && d > maxDur) maxDur = d
+            }
             return false
           })
           if (spid !== undefined) {
             const hit = presetFrom(cls, getAttr(c, 'presetID'))
-            out.push({ spid: Number(spid), preset: hit.preset, cls: hit.cls })
+            const own = parseTimeValue(getAttr(c, 'dur'))
+            const dur = own !== undefined && own !== Infinity ? own : maxDur || undefined
+            out.push({ spid: Number(spid), preset: hit.preset, cls: hit.cls, dur, delay: parseTimeValue(firstCondDelayR(c)) })
           }
         }
         return

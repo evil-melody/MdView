@@ -94,8 +94,10 @@ export interface NewFileType {
   label: string
   ext: string
   icon: string
-  /** 新建时的初始内容 */
+  /** 新建时的初始内容（文本类型用；binary 类型忽略，走 blankOfficeBytes 生成） */
   template: string
+  /** 二进制 OOXML（Office 三件套）：空白文档由内核生成器产出字节 */
+  binary?: 'docx' | 'xlsx' | 'pptx'
 }
 
 /**
@@ -111,7 +113,10 @@ export const NEW_FILE_TYPES: NewFileType[] = [
   { key: 'toml', label: 'TOML', ext: 'toml', icon: '⚙️', template: '' },
   { key: 'ini', label: 'INI 配置', ext: 'ini', icon: '🔧', template: '' },
   { key: 'html', label: 'HTML', ext: 'html', icon: '🌐', template: '<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n  <meta charset="UTF-8" />\n  <title>新页面</title>\n</head>\n<body>\n  \n</body>\n</html>\n' },
-  { key: 'shell', label: 'Shell 脚本', ext: 'sh', icon: '🐚', template: '#!/usr/bin/env bash\nset -euo pipefail\n\n' }
+  { key: 'shell', label: 'Shell 脚本', ext: 'sh', icon: '🐚', template: '#!/usr/bin/env bash\nset -euo pipefail\n\n' },
+  { key: 'docx', label: 'Word 文档', ext: 'docx', icon: '📘', template: '', binary: 'docx' },
+  { key: 'xlsx', label: 'Excel 表格', ext: 'xlsx', icon: '📗', template: '', binary: 'xlsx' },
+  { key: 'pptx', label: 'PowerPoint', ext: 'pptx', icon: '📙', template: '', binary: 'pptx' }
 ]
 
 export const KIND_LABEL: Record<string, string> = {

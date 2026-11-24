@@ -488,6 +488,7 @@ async function createNewFile(p: { type: NewFileType; name: string; dir: string }
   const fileName = `${p.name}.${p.type.ext}`
   const dir = p.dir.replace(/[/\\]+$/, '')
   const path = `${dir}/${fileName}`
+  let size = p.type.template.length
   try {
     const siblings = await scanDirectory(dir)
     // 大小写不敏感比较：macOS/Windows 文件系统下 readme.md 会覆盖 README.md
@@ -496,7 +497,15 @@ async function createNewFile(p: { type: NewFileType; name: string; dir: string }
       showToast(`「${fileName}」已存在，换个名字`)
       return
     }
-    await writeText(path, p.type.template)
+    if (p.type.binary) {
+      // Office 三件套：空白 OOXML 由内核生成器产出（动态 import，不进主包）
+      const { blankOfficeBytes } = await import('./office/core/blank')
+      const bytes = await blankOfficeBytes(p.type.binary)
+      await writeFileBytes(path, bytes)
+      size = bytes.length
+    } else {
+      await writeText(path, p.type.template)
+    }
   } catch (e) {
     showToast('创建失败: ' + String(e))
     return

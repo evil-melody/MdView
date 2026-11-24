@@ -186,6 +186,11 @@ export type SheetOp =
   | { op: 'gridlines'; show: boolean }
   | { op: 'colWidth'; c0: number; c1: number; px: number }
   | { op: 'rowHeight'; r0: number; r1: number; px: number }
+  /** P5 对话框口径（Excel 同款）：chars 输入，内核三段式 chars→px（setColWidth Workbook.js:8863-8864） */
+  | { op: 'colWidthChars'; c0: number; c1: number; chars: number }
+  /** P5 内核 autoFit（_autoFitColumnWidth WorksheetView.js:19335 / _updateRowHeight :10430） */
+  | { op: 'autoFitCols'; c0: number; c1: number }
+  | { op: 'autoFitRows'; r0: number; r1: number }
   | { op: 'freeze'; rows: number; cols: number }
   | { op: 'fill'; range: Range; dir: 'down' | 'right' | 'up' | 'left'; mode?: FillMode; src?: Range }
   | { op: 'pageSetup'; setup: XlsxPageSetup }

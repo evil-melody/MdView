@@ -91,6 +91,14 @@ function shiftSheetOp(op: SheetOp, axis: 'row' | 'col', at: number, n: number): 
       const s = span(op.r0, op.r1, 'row')
       return s ? { ...op, r0: s[0], r1: s[1] } : null
     }
+    case 'autoFitCols': {
+      const s = span(op.c0, op.c1, 'col')
+      return s ? { ...op, c0: s[0], c1: s[1] } : null
+    }
+    case 'autoFitRows': {
+      const s = span(op.r0, op.r1, 'row')
+      return s ? { ...op, r0: s[0], r1: s[1] } : null
+    }
     default:
       return op
   }

@@ -137,6 +137,12 @@ function commitCell(i: number, ri: number, ci: number, ev: Event) {
 function plainText(body: TextBody): string {
   return body.paras.map((p) => p.runs.map((r) => (r.br ? '\n' : r.text)).join('')).join('\n')
 }
+/** 编辑层样式：取首个非空 run 的字体/字号/颜色/粗斜体，编辑中不再回退默认小号黑字；
+ *  pre-wrap 保换行与连续空格（contenteditable 默认 white-space 会吞缩进）。 */
+function editTextStyle(body?: TextBody): string {
+  const run = body?.paras.flatMap((p) => p.runs).find((r) => r.text && !r.br)
+  return `${run ? runCss(run) + ';' : ''}white-space:pre-wrap`
+}
 /** contenteditable 自动聚焦（ref 回调在挂载后触发） */
 function focusEl(node: unknown) {
   const el = node as HTMLElement | null
@@ -200,19 +206,37 @@ function dgmLines(el: Extract<SlideEl, { t: 'smartart' }>): { x1: number; y1: nu
 const animState = ref<{ wait: number[]; run: { i: number; preset: string }[] } | null>(null)
 let animToken = 0
 /** 播放序列：优先用 SlideModel.animSeq（spid→顺序，解析自 mainSeq clickEffect），按 spid 映射到元素索引；
- *  旧模型 / stub（无 animSeq）回退按元素数组顺序（兼容 v32 等回归）。 */
-function playList(): { i: number; preset: string }[] {
+ *  旧模型 / stub（无 animSeq）回退按元素数组顺序（兼容 v32 等回归）。
+ *  时序 = PowerPoint click 序列的自动模拟：每个 clickEffect 一次点击——点击时刻 = cursor，
+ *  效果起点 = 点击 + delay（delay 相对本 click 组起点；indefinite = 等点击本身，记 0），
+ *  终点 = 起点 + dur，下一次点击落在上一效果终点。dur/delay 缺省走 650ms 固定步长
+ *  （= 旧行为基线，v32 回归零漂移）；封顶 8s 防异常长值挂死播放。 */
+interface AnimStep { i: number; preset: string; t: number; end: number }
+const DEFAULT_EFFECT_MS = 650
+const MAX_EFFECT_MS = 8000
+/** 有限值取毫秒（indefinite=Infinity / 缺省 → 0） */
+const delayMs = (v: number | undefined): number => (v !== undefined && Number.isFinite(v) ? Math.min(v, MAX_EFFECT_MS) : 0)
+function playList(): AnimStep[] {
   const s = props.slide
-  const out: { i: number; preset: string }[] = []
+  const out: AnimStep[] = []
   const seq = s.animSeq
   if (seq && seq.length) {
+    let cursor = 0
     for (const e of seq) {
+      const start = cursor + delayMs(e.delay)
+      const dur = e.dur !== undefined && Number.isFinite(e.dur) ? Math.min(e.dur, MAX_EFFECT_MS) : DEFAULT_EFFECT_MS
       const i = s.els.findIndex((el) => el.top === e.spid)
-      if (i >= 0) out.push({ i, preset: e.preset })
+      if (i >= 0) out.push({ i, preset: e.preset, t: start, end: start + dur })
+      cursor = start + dur
     }
     return out
   }
-  s.els.forEach((el, i) => { if (el.anim) out.push({ i, preset: el.anim }) })
+  let t = 0
+  s.els.forEach((el, i) => {
+    if (!el.anim) return
+    out.push({ i, preset: el.anim, t, end: t + DEFAULT_EFFECT_MS })
+    t += DEFAULT_EFFECT_MS
+  })
   return out
 }
 watch(() => props.playSeq, () => {
@@ -222,15 +246,16 @@ watch(() => props.playSeq, () => {
   // wait 用去重后的元素索引；同元素多效果时只在第一次触发前隐藏
   const uniq = [...new Set(list.map((a) => a.i))]
   animState.value = { wait: uniq, run: [] }
-  list.forEach((a, k) => {
+  const lastEnd = Math.max(...list.map((a) => a.end))
+  list.forEach((a) => {
     setTimeout(() => {
       if (token !== animToken) return
       const st = animState.value
       if (!st) return
       animState.value = { wait: st.wait.filter((w) => w !== a.i), run: [...st.run, { i: a.i, preset: a.preset }] }
-      if (k === list.length - 1) setTimeout(() => { if (token === animToken) animState.value = null }, 800)
-    }, k * 650)
+    }, a.t)
   })
+  setTimeout(() => { if (token === animToken) animState.value = null }, lastEnd + 150)
 })
 /** 元素类：动画等待隐藏 / 播放中套对应 keyframes（同元素多效果取最后触发的一个） */
 function animClass(i: number): Record<string, boolean> {
@@ -691,17 +716,30 @@ onMounted(() => {
     ro = new ResizeObserver(measure)
     if (wrapEl.value) ro.observe(wrapEl.value)
   }
-  if (interactive.value) {
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
-  }
+  bindDragListeners()
   measure()
   void hydrate()
 })
 onBeforeUnmount(() => {
   ro?.disconnect()
+  unbindDragListeners()
+})
+/** 拖动监听按 interactive 动态挂卸：画布先只读挂载、后切编辑时，onMounted 的一次性
+ *  判断永远不会再跑 —— 元素级 pointerdown（选中/手柄）响应了但 window 级 move/up 缺失，
+ *  表现为「选得中、拖不动」（预览→编辑切换故障）。 */
+function bindDragListeners() {
+  if (!interactive.value) return
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', onUp)
+}
+function unbindDragListeners() {
   window.removeEventListener('pointermove', onMove)
   window.removeEventListener('pointerup', onUp)
+}
+watch(interactive, (v) => {
+  unbindDragListeners()
+  if (v) bindDragListeners()
+  else { pending = null; active = false; drag.value = null; marqueeStart = null; marquee.value = null }
 })
 </script>
 
@@ -753,7 +791,7 @@ onBeforeUnmount(() => {
             <div
               v-if="textEdit && textEdit.i === i"
               class="ov-slide-text ov-slide-text-edit"
-              :style="textBoxStyle(el.text)"
+              :style="[textBoxStyle(el.text), editTextStyle(el.text)]"
               contenteditable="true"
               spellcheck="false"
               :ref="focusEl"
@@ -917,6 +955,7 @@ onBeforeUnmount(() => {
                     <div
                       v-if="cellEdit && cellEdit.i === i && cellEdit.ri === ri && cellEdit.ci === ci"
                       class="ov-cell-edit"
+                      :style="editTextStyle(cell.text)"
                       contenteditable="true"
                       spellcheck="false"
                       :ref="focusEl"

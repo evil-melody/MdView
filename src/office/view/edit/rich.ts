@@ -38,6 +38,24 @@ export function runsText(runs: RRun[]): string {
   return runs.map((r) => (r.t === 'text' ? r.text : '\uFFFC')).join('')
 }
 
+/** 选区纯文本（复制/剪切通道）：文本 run 切片，对象丢弃。
+ *  w:br 在模型里就是 text run 内的 '\n' 字符 —— 切片天然保留真实换行，
+ *  而 P4a 行级 DOM 的 Selection.toString() 会给软换行补伪 '\n'（伪固化为拆段）。 */
+export function slicePlain(runs: RRun[], from: number, to: number): string {
+  let out = ''
+  let pos = 0
+  for (const r of runs) {
+    const n = rlen(r)
+    if (r.t === 'text') {
+      const a = Math.max(from, pos) - pos
+      const b = Math.min(to, pos + n) - pos
+      if (b > a) out += r.text!.slice(a, b)
+    }
+    pos += n
+  }
+  return out
+}
+
 function shallowEq(a: object | undefined, b: object | undefined): boolean {
   if (a === b) return true
   if (!a || !b) return !a && !b

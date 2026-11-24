@@ -10,6 +10,10 @@ export interface RunStyle {
   color?: string
   sz?: number
   font?: string
+  /** 原始族名（未 cssFont 化）—— 字体度量内核按族名查 FontRegistry 用 */
+  rfont?: string
+  /** eastAsia 槽原始族名（CJK 字体度量回退用） */
+  rfontEA?: string
   hl?: string
   shd?: string
   va?: 'sup' | 'sub'
@@ -41,9 +45,22 @@ export interface ParaStyle {
   bLeft?: Border
   bRight?: Border
   keepNext?: boolean
+  keepLines?: boolean
+  widow?: boolean
   pageBreakBefore?: boolean
   outline?: number
   contextual?: boolean
+  snapGrid?: boolean
+  autoNameSpace?: boolean
+  /** 制表位（pt）；stop = 对齐 + 引导符 */
+  tabs?: Tag[]
+}
+
+/** w:tab 计算表示：pos 单位 pt，al 缺省 left，leader 缺省 none（ST_TabTlc：WML 词表，非 DrawingML） */
+export interface Tag {
+  pos: number
+  al?: 'left' | 'center' | 'right' | 'decimal' | 'bar' | 'clear'
+  leader?: 'none' | 'dot' | 'hyphen' | 'underscore' | 'heavy' | 'middleDot'
 }
 
 /** [paragraph id, run ordinal] of the source run in the original XML */
@@ -446,7 +463,10 @@ export interface TableCell {
   src?: [number, number]
   colSpan: number
   rowSpan: number
+  /** w:tcW dxa（pt） */
   w?: number
+  /** w:tcW pct（百分比，结算基准 = 可用宽） */
+  wPct?: number
   shd?: string
   vAlign?: 'top' | 'middle' | 'bottom'
   borders: CellBorders
@@ -474,7 +494,14 @@ export interface Table {
   rows: TableRow[]
   align?: 'left' | 'center' | 'right'
   indL?: number
+  /** w:tblW dxa（pt） */
   w?: number
+  /** w:tblW pct（百分比，结算基准 = 可用宽） */
+  wPct?: number
+  /** w:tblLayout val（fixed/autofit；缺省 = autofit） */
+  layout?: 'fixed' | 'autoFit'
+  /** w:tblCellSpacing dxa（pt；无 = undefined） */
+  cellSpacing?: number
 }
 
 export interface PageSetup {
@@ -534,6 +561,8 @@ export interface DocxMeta {
   titlePg?: boolean
   /** w:evenAndOddHeaders in settings.xml: even pages use the "even" header / footer parts */
   evenAndOddHeaders?: boolean
+  /** settings.xml compatibilityMode（缺省 12 = sdkjs Current；新建表宽预算 nAdd 门控） */
+  compatMode?: number
   /** body default font (CSS) and size */
   font?: string
   sz?: number

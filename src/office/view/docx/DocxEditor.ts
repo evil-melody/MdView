@@ -2,6 +2,7 @@
  * Main-thread DOCX editing host: owns undo history and paragraph mutations,
  * mirrors every change to the worker (which regenerates the XML).
  */
+import { newTableNAddPt } from '../../core/docx/compat'
 import { paraSpec, tableSpec } from '../../core/docx/spec'
 import type {
   Block, CanonStyle, EditOp, EditResult, HeaderFooters, HFSet, HFSetResult, Inline, PageSet, PageSetResult, PageSetup, Paragraph, ParaDirty, ParaStyle, RunSet, RunStyle, StyleInfo, StyleLook, Table, WrapSpec,
@@ -974,6 +975,8 @@ export class DocxEditor implements RichHost<Paragraph> {
 
   /** content width (pt) of the page, for sizing new tables / images */
   contentW = 468
+  /** settings.xml compatibilityMode（meta 带入；新建表宽预算 nAdd 门控） */
+  compatMode = 12
   /** document default font (CSS) / size, shown when a run inherits them */
   defaultFont?: string
   defaultSz?: number
@@ -1054,7 +1057,8 @@ export class DocxEditor implements RichHost<Paragraph> {
     const bi = sel ? Number(sel.f.pa.split('.')[0]) : -1
     const p = this.st.blocks[bi]
     if (!sel || sel.f.pa.includes('.') || p?.t !== 'p' || p.pid === undefined) return
-    const t: Table = { ...newTable(rowsN, colsN, this.contentW, () => this.emptyPara(p)), tid: this.nextPid++ }
+    // 宽预算 = 可用宽 + nAdd（Document.js:20094：mode≤Word14 → 10.8pt，否则 0）
+    const t: Table = { ...newTable(rowsN, colsN, this.contentW + newTableNAddPt(this.compatMode), () => this.emptyPara(p)), tid: this.nextPid++ }
     const after: Block[] = [p, t]
     const nextBlock = this.st.blocks[bi + 1]
     if (!nextBlock || nextBlock.t !== 'p') after.push(this.emptyPara(p))
@@ -1936,7 +1940,8 @@ export class DocxEditor implements RichHost<Paragraph> {
   }
 
   private cellState(sel: Sel): FormatState['cells'] {
-    const r = this.cellRange(sel)
+    // 右键/ribbon 抢焦点后实时选区可能离开单元格：表格态用快照兜底
+    const r = this.cellRange(this.tableCmdSel() ?? sel)
     if (!r) return undefined
     const [bi, ri, ci] = path(sel.f.pa)
     const cell = (this.st.blocks[bi] as Table).rows[ri]?.cells[ci]
@@ -1955,8 +1960,31 @@ export class DocxEditor implements RichHost<Paragraph> {
     this.emitState(sel)
   }
 
+  /** 右键菜单用：单元格选区概况（n=覆盖格数，merged=锚格是否合并格）；选区被系统清掉时走快照兜底 */
+  cellMenuInfo(): { n: number; merged: boolean } | null {
+    const sel = this.tableCmdSel()
+    if (!sel) return null
+    const r = this.cellRange(sel)
+    if (!r) return null
+    const [bi, ri, ci] = path(sel.f.pa)
+    const cell = (this.st.blocks[bi] as Table).rows[ri]?.cells[ci]
+    return { n: r.cells, merged: !!cell && (cell.colSpan > 1 || cell.rowSpan > 1) }
+  }
+
+  /** 右键菜单冻结：菜单打开期间选区被系统清掉也不撤 tint（WKWebView 右键先清选区） */
+  private cellsFrozen = false
+  setCellsFrozen(v: boolean) {
+    this.cellsFrozen = v
+    this.paintCells(v ? this.tableCmdSel() : this.input.sel())
+  }
+
   /** table cells covered by a selection that spans more than one cell get a tint */
   private markCells(sel: Sel | null) {
+    if (this.cellsFrozen) return
+    this.paintCells(sel)
+  }
+
+  private paintCells(sel: Sel | null) {
     const root = this.input.root
     if (!root) return
     root.querySelectorAll('.de-cell-sel').forEach((el) => el.classList.remove('de-cell-sel'))

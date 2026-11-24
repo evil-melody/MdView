@@ -5,6 +5,7 @@ import { emuToPt } from '../units'
 import { desc, descAll, kid, kids, num, parseXml, parseXmlStream, path, TreeBuilder, type SaxHandler, type XEl } from '../xml'
 import { Numbering } from './numbering'
 import { readDocxComments, type DocxComments } from './comments'
+import { defaultCellMarginPt, parseCompatMode } from './compat'
 import {
   borderCss, merge, pPrDelta, readMargins, readPPr, readRPr, readTableBorders, rPrDelta, shading, StyleSheet, type NumPr,
 } from './styles'
@@ -27,7 +28,7 @@ interface Sink {
   markLast(id: string): void
 }
 
-export type Layer = { ps: ParaStyle; rs: RunStyle }
+export type Layer = { ps: ParaStyle; rs: RunStyle; tbl?: string }
 
 export interface ParaRecord {
   layer?: Layer
@@ -156,12 +157,14 @@ export class Converter {
   /** threads whose range was seen */
   readonly seen = new Set<string>()
 
-  constructor(
+constructor(
     private styles: StyleSheet,
     private numbering: Numbering,
     private theme: Theme,
     private rels: Rels,
     private hooks: ConvHooks = {},
+    /** settings.xml compatibilityMode（表距种子用；缺省 Word12 = sdkjs Current） */
+    private compatMode = 12,
   ) {}
 
   blocks(el: XEl, out: Block[]): void {
@@ -207,13 +210,21 @@ export class Converter {
   paragraph(el: XEl, out: Block[]): void {
     const pPr = kid(el, 'pPr')
     const d = readPPr(pPr)
-    const st = this.styles.para(d.styleId)
     const forced = this.hooks.forced?.root === el ? this.hooks.forced : undefined
     const layer = forced ? forced.layer : this.tableLayer
+    // 计算面：种子（docDefaults 或表格样式）+ BasedOn 链 + 编号层 + 自身，全在 styles 内算完
+    const st = this.styles.para(d.styleId, layer?.tbl)
     const numPr = d.numPr ?? st.numPr
     const level = numPr && numPr.numId !== '0' ? this.numbering.level(numPr.numId, numPr.ilvl) : undefined
-    const ps = merge<ParaStyle>(this.styles.docPs, layer?.ps, st.ps, level?.ps, d.ps)
-    const base = merge<RunStyle>(this.styles.docRs, layer?.rs, st.rs)
+    // layer 只剩表格条件面（band/firstCol…）—— 表格样式本身已作种子进 st
+    // level?.ps：有效 numPr（直设优先）的编号层 pPr —— 样式链内的编号 pPr 已由
+    // calcInto 并入，直设编号在此再叠一层（Word 语义：直设编号压样式编号），同值幂等
+    const ps = merge<ParaStyle>(st.ps, layer?.ps, level?.ps)
+    // 段直设 numId=0：压掉样式链编号带来的缩进（Word 语义）——在直接 pPr 之前清零，
+    // 段自身的 w:ind 仍可赢过它
+    if (numPr && numPr.numId === '0') { ps.indL = 0; ps.indFirst = 0 }
+    Object.assign(ps, d.ps)
+    const base = merge<RunStyle>(st.rs, layer?.rs)
     const markRs = merge<RunStyle>(base, readRPr(kid(pPr, 'rPr'), this.theme))
     const sid = d.styleId ?? this.styles.defaultPara ?? ''
     let cur: Paragraph = { t: 'p', ps, runs: [], markSz: markRs.sz, markFont: markRs.font, sid }
@@ -225,10 +236,12 @@ export class Converter {
     if (chg && oldPPr) {
       const od = readPPr(oldPPr)
       const oSid = od.styleId ?? d.styleId
-      const oStyle = this.styles.para(oSid)
+      const oStyle = this.styles.para(oSid, layer?.tbl)
       const oNumPr = od.numPr ?? st.numPr
       const oLevel = oNumPr && oNumPr.numId !== '0' ? this.numbering.level(oNumPr.numId, oNumPr.ilvl) : undefined
-      const oldPs = merge<ParaStyle>(this.styles.docPs, layer?.ps, oStyle.ps, oLevel?.ps, od.ps)
+      const oldPs = merge<ParaStyle>(oStyle.ps, layer?.ps, oLevel?.ps)
+      if (oNumPr && oNumPr.numId === '0') { oldPs.indL = 0; oldPs.indFirst = 0 }
+      Object.assign(oldPs, od.ps)
       pc = {
         id: chg.a.id,
         author: chg.a.author,
@@ -337,17 +350,18 @@ export class Converter {
     return cur.pid !== undefined ? { src: [cur.pid, k], cm: this.marks() } : { cm: this.marks() }
   }
 
-  private inlines(children: XEl[], base: RunStyle, href: string | undefined, lk: string | undefined, sink: Sink): void {
+  private inlines(children: XEl[], base: RunStyle, href: string | undefined, lk: string | undefined, sink: Sink, hl?: RunStyle): void {
     for (const c of children) {
       switch (c.n) {
         case 'r':
-          this.run(c, base, href, lk, sink)
+          this.run(c, base, href, lk, sink, hl)
           break
         case 'hyperlink': {
           const id = c.a['r:id']
           const target = id ? this.rels.get(id)?.target : c.a.anchor ? '#' + c.a.anchor : undefined
           const link = id ? 'r:' + id : c.a.anchor ? 'a:' + c.a.anchor : undefined
-          this.inlines(c.c, base, target ?? href, link ?? lk, sink)
+          // sdkjs：hyperlink 内 run 隐式套 Default.Hyperlink 字符样式（Paragraph.js:8099）
+          this.inlines(c.c, base, target ?? href, link ?? lk, sink, this.styles.hyperlink())
           break
         }
         case 'fldSimple': {
@@ -355,7 +369,7 @@ export class Converter {
           if (kind) {
             const r = kid(c, 'r')
             sink.push({ t: 'field', kind, s: merge(base, readRPr(kid(r, 'rPr'), this.theme)), ...(r ? this.srcOf(r) : {}) })
-          } else this.inlines(c.c, base, href, lk, sink)
+          } else this.inlines(c.c, base, href, lk, sink, hl)
           break
         }
         case 'ins':
@@ -366,7 +380,7 @@ export class Converter {
           // keep the move kind (and its pairing name) so a round-trip still renders / reviews it as a move
           const k: TrackMark['k'] = c.n === 'ins' ? 'ins' : c.n === 'del' ? 'del' : c.n === 'moveTo' ? 'moveTo' : 'moveFrom'
           this.tc = { k, id: c.a.id, author: c.a.author, date: c.a.date, ...(c.a.name ? { name: c.a.name } : {}) }
-          this.inlines(c.c, base, href, lk, sink)
+          this.inlines(c.c, base, href, lk, sink, hl)
           this.tc = prev
           break
         }
@@ -374,10 +388,10 @@ export class Converter {
         case 'customXml':
         case 'bdo':
         case 'dir':
-          this.inlines(c.c, base, href, lk, sink)
+          this.inlines(c.c, base, href, lk, sink, hl)
           break
         case 'sdt':
-          this.inlines(kid(c, 'sdtContent')?.c ?? [], base, href, lk, sink)
+          this.inlines(kid(c, 'sdtContent')?.c ?? [], base, href, lk, sink, hl)
           break
         case 'commentRangeStart':
         case 'commentRangeEnd':
@@ -393,9 +407,11 @@ export class Converter {
     }
   }
 
-  private run(r: XEl, base: RunStyle, href: string | undefined, lk: string | undefined, sink: Sink): void {
+  private run(r: XEl, base: RunStyle, href: string | undefined, lk: string | undefined, sink: Sink, hl?: RunStyle): void {
     const rPr = kid(r, 'rPr')
-    const s = merge<RunStyle>(base, this.styles.char(kid(rPr, 'rStyle')?.a.val), readRPr(rPr, this.theme))
+    const rStyle = kid(rPr, 'rStyle')?.a.val
+    // sdkjs：run 自带 rStyle 则超链接样式不叠加（显式压隐式）
+    const s = merge<RunStyle>(base, rStyle ? this.styles.char(rStyle) : hl, readRPr(rPr, this.theme))
     if (s.vanish) return
     const { src, d, cm } = this.srcOf(r)
     const tc = this.tc
@@ -407,7 +423,7 @@ export class Converter {
           id: chg.a.id,
           author: chg.a.author,
           date: chg.a.date,
-          s: merge<RunStyle>(base, this.styles.char(kid(rPr, 'rStyle')?.a.val), readRPr(oldRPr, this.theme)),
+          s: merge<RunStyle>(base, rStyle ? this.styles.char(rStyle) : hl, readRPr(oldRPr, this.theme)),
           d: rPrDelta(rPr, oldRPr, this.theme),
         }
       : undefined
@@ -599,10 +615,19 @@ export class Converter {
     const ts = this.styles.table(kid(tblPr, 'tblStyle')?.a.val)
     const look = readLook(kid(tblPr, 'tblLook'))
     const borders = { ...ts.borders, ...readTableBorders(kid(tblPr, 'tblBorders')) }
-    const mar = { top: 0, bottom: 0, left: 5.4, right: 5.4, ...ts.cellMar, ...readMargins(kid(tblPr, 'tblCellMar')) }
+    // 表距种子 = CTablePr.InitDefault(compatMode) 的左右值（Styles.js:11136-11137：
+    // mode≤Word12 → 0.5pt，否则 5.4pt；上下恒 0）。Normal Table 样式（postload 注入或
+    // 文档自带）的 tblCellMar 5.4pt 在链层覆盖它——无样式表恒 5.4；自定义表样式缺
+    // cellMar 时才吃到 compat 种子（Word12 文档 → 0.5pt）。直设 tblCellMar 最后压顶。
+    const seedMar = defaultCellMarginPt(this.compatMode)
+    const mar = { top: 0, bottom: 0, left: seedMar, right: seedMar, ...ts.cellMar, ...readMargins(kid(tblPr, 'tblCellMar')) }
     const cols = kids(kid(el, 'tblGrid'), 'gridCol').map((g) => (num(g.a.w) ?? 0) / 20)
     const jc = kid(tblPr, 'jc')?.a.val
     const ind = kid(tblPr, 'tblInd')
+    const tblW = kid(tblPr, 'tblW')
+    const tblLayout = kid(tblPr, 'tblLayout')?.a.type
+    const csEl = kid(tblPr, 'tblCellSpacing')
+    const cellSpacing = csEl && (csEl.a.type ?? 'dxa') === 'dxa' ? Number(csEl.a.w) / 20 : undefined
     const rowEls = flatten(el, 'tr')
 
     interface Tmp extends TableCell { gs: number; vm?: 'restart' | 'continue'; tcB: ReturnType<typeof readTableBorders>; gone?: boolean; ri: number }
@@ -643,19 +668,23 @@ export class Converter {
         }
         shd = shading(kid(tcPr, 'shd')) ?? shd
         const prev = this.tableLayer
-        this.tableLayer = { ps: ts.ps, rs: merge(ts.rs, crs) }
+        // 表格样式本体走 para() 的种子面；layer 只留条件格式（band/firstRow…）叠加
+        const tid = kid(tblPr, 'tblStyle')?.a.val
+        this.tableLayer = { ps: {}, rs: crs, ...(tid ? { tbl: tid } : {}) }
         const blocks: Block[] = []
         for (const c of tc.c) if (c.n !== 'tcPr') this.blocks(c, blocks)
         this.tableLayer = prev
         const cm = readMargins(kid(tcPr, 'tcMar'))
         const va = kid(tcPr, 'vAlign')?.a.val
         const tcW = kid(tcPr, 'tcW')
+        const tcWType = tcW?.a.type ?? 'dxa'
         cells.push({
           blocks,
           src: [ri, tci],
           colSpan: span,
           rowSpan: 1,
-          w: tcW && (tcW.a.type ?? 'dxa') === 'dxa' ? Number(tcW.a.w) / 20 : undefined,
+          w: tcW && tcWType === 'dxa' ? Number(tcW.a.w) / 20 : undefined,
+          wPct: tcW && tcWType === 'pct' ? Number(tcW.a.w) / 50 : undefined,
           shd,
           vAlign: va === 'center' ? 'middle' : va === 'bottom' ? 'bottom' : undefined,
           borders: {},
@@ -699,12 +728,17 @@ export class Converter {
       }
       return row
     })
+    const tblWType = tblW?.a.type ?? 'dxa'
     return {
       t: 'tbl',
       cols,
       rows,
       align: jc === 'center' ? 'center' : jc === 'right' || jc === 'end' ? 'right' : undefined,
       indL: ind && (ind.a.type ?? 'dxa') === 'dxa' ? Number(ind.a.w) / 20 : undefined,
+      w: tblW && tblWType === 'dxa' ? Number(tblW.a.w) / 20 : undefined,
+      wPct: tblW && tblWType === 'pct' ? Number(tblW.a.w) / 50 : undefined,
+      layout: tblLayout === 'fixed' ? 'fixed' : tblLayout === 'autofit' ? 'autoFit' : undefined,
+      cellSpacing,
     }
   }
 }
@@ -876,6 +910,8 @@ export class DocxDocument {
     const numRel = relOfType(rels, 'numbering')
     const styles = new StyleSheet(stylesRel ? await pkg.xml(stylesRel.target) : undefined, theme)
     const numbering = new Numbering(numRel ? await pkg.xml(numRel.target) : undefined, theme)
+    // 样式链内的编号层 pPr 由 calcInto 并入（sdkjs Internal_Get_Pr 同规）
+    styles.setNumbering(numbering)
     const comments = await readDocxComments(pkg, mainPath, rels).catch((e: Error) => {
       console.warn('[office] comments not read:', e.message)
       return readDocxComments(pkg, mainPath, new Map())
@@ -888,7 +924,11 @@ export class DocxDocument {
       const root = await pkg.xml(setRel.target)
       const eao = root ? kid(root, 'evenAndOddHeaders') : undefined
       doc.evenOdd = !!eao && eao.a.val !== '0' && eao.a.val !== 'false'
+      // compatibilityMode（compat.ts）：表距种子门控；缺省 Word12（sdkjs Current）
+      doc.compatMode = parseCompatMode(root)
     }
+    // PostLoadPrepare（postload.ts）：缺省样式注入 + 灰标法环切断（计算面）
+    styles.applyPostload()
     return doc
   }
 
@@ -910,6 +950,8 @@ export class DocxDocument {
   titlePg = false
   /** w:evenAndOddHeaders in settings.xml as read from the file */
   evenOdd = false
+  /** settings.xml compatibilityMode（缺省 Word12 = sdkjs Current；表距种子门控，compat.ts） */
+  compatMode = 12
   /** "different odd / even pages" as set by the editor (undefined: as in the file) */
   evenOddSet?: boolean
   /** path of the settings part (created on save when the file has none) */
@@ -936,7 +978,7 @@ export class DocxDocument {
     if (!rel) return undefined
     const root = await this.pkg.xml(rel.target)
     if (!root) return undefined
-    const conv = new Converter(this.styles, this.numbering, this.theme, await this.pkg.rels(rel.target))
+    const conv = new Converter(this.styles, this.numbering, this.theme, await this.pkg.rels(rel.target), {}, this.compatMode)
     const out: Block[] = []
     for (const c of root.c) conv.blocks(c, out)
     return out
@@ -964,11 +1006,12 @@ export class DocxDocument {
       },
       comment: (num) => this.comments.rootOfNum(num),
     }
-    const conv = new Converter(this.styles, this.numbering, this.theme, this.rels, hooks)
+    const conv = new Converter(this.styles, this.numbering, this.theme, this.rels, hooks, this.compatMode)
     const baseMeta = {
       font: this.styles.docRs.font ?? '"Times New Roman", serif',
       sz: this.styles.docRs.sz ?? 10,
       styles: this.styles.quickStyles(),
+      compatMode: this.compatMode,
     }
     let pending: Block[] = []
     let finalSect: XEl | undefined
@@ -1063,7 +1106,7 @@ export class DocxDocument {
   reconvert(pid: number, xml: string, map: GenRun[], layer: Layer | undefined, marker?: ListMarker): { blocks: Block[]; rec: ParaRecord } {
     const root = parseXml(xml)
     const forced: NonNullable<ConvHooks['forced']> = { pid, root, map, layer, marker }
-    const conv = new Converter(this.styles, this.numbering, this.theme, this.rels, { forced })
+    const conv = new Converter(this.styles, this.numbering, this.theme, this.rels, { forced }, this.compatMode)
     const out: Block[] = []
     conv.paragraph(root, out)
     return { blocks: out, rec: forced.rec! }

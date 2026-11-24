@@ -36,6 +36,13 @@
   color: #1d2127;
 }
 
+/* 同源 webfont：内核 wasm 度量与浏览器渲染读同一批 TTF（public/fonts/），
+   行宽残余只剩 kerning/连字 feature 集差异（x15 探针 ④ 归因，P4b 内核回写消化） */
+@font-face { font-family: Carlito; font-style: normal; font-weight: 400; src: url('/fonts/Carlito-Regular.ttf') format('truetype'); }
+@font-face { font-family: Carlito; font-style: italic; font-weight: 400; src: url('/fonts/Carlito-Italic.ttf') format('truetype'); }
+@font-face { font-family: Carlito; font-style: normal; font-weight: 700; src: url('/fonts/Carlito-Bold.ttf') format('truetype'); }
+@font-face { font-family: Carlito; font-style: italic; font-weight: 700; src: url('/fonts/Carlito-BoldItalic.ttf') format('truetype'); }
+
 .ov-doc-root .de-p {
   margin: 0;
   white-space: pre-wrap;
@@ -43,6 +50,10 @@
   tab-size: 36pt;
   -moz-tab-size: 36pt;
 }
+/* ---- P4a 行级片段：断行/行高全由排版内核决定，浏览器只摆放已定好的行 ----
+   基线 = 浏览器按同源字体度量自然落位（与内核同一批 TTF → 残余仅 kerning/连字 feature 差，
+   P4b 内核回写消化）；行高夹不下的超垂（exact 规则）按 Word 观感溢出，不裁切。 */
+.ov-doc-root .de-line { white-space: pre; }
 .ov-doc-root .de-tbl { border-collapse: collapse; table-layout: fixed; }
 .ov-doc-root .de-tbl td { border: 1px solid #b9bdc3; }
 .ov-doc-root .de-block { position: relative; }

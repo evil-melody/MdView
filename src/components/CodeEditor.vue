@@ -229,7 +229,7 @@ defineExpose({ getValue })
       <span class="cde-lang">{{ label }}</span>
       <template v-if="stream">
         <span class="cde-hint">
-          流式只读 · {{ streamLabel }}<span v-if="streamStat.done"> · 加载完成</span><span v-else> · 加载中…</span>
+          流式只读 · {{ streamLabel }}<span v-if="streamErr"> · 已终止</span><span v-else-if="streamStat.done"> · 加载完成</span><span v-else> · 加载中…</span>
         </span>
         <progress
           v-if="streamStat.total && !streamStat.done"
@@ -246,7 +246,8 @@ defineExpose({ getValue })
     </div>
     <div v-if="streamErr" class="cde-stream-err">{{ streamErr }}</div>
     <div v-if="bootErr" class="cde-err">{{ bootErr }}</div>
-    <div v-else ref="hostRef" class="cde-host scrollable"></div>
+    <!-- 初始化失败或二进制提前终止时，空编辑器（行号 + 0 字符）不占位，只留红条说明 -->
+    <div v-show="!streamErr && !bootErr" ref="hostRef" class="cde-host scrollable"></div>
   </div>
 </template>
 

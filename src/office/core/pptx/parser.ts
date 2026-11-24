@@ -3,6 +3,7 @@ import { readPptxComments, PptxComments, writePptxComments } from './comments'
 import { readChartPart } from './chart'
 import { layoutDiagram } from './diagram'
 import { parseTimingListX, parseTimingX, parseTransitionX } from './anim'
+import { matchPlaceholder, type PhGlyph } from './inherit'
 import { readNotes } from './notes'
 import { cssFont } from '../fonts'
 import { OpcPackage, relOfType, relsOfType, type Rels } from '../opc'
@@ -124,8 +125,9 @@ interface Part {
   root: XEl
   rels: Rels
   spTree?: XEl
-  byIdx: Map<string, XEl>
-  byType: Map<string, XEl>
+  /** spTree 直接子级占位符的文档顺序序列（matchPlaceholder 的输入；
+   *  sdkjs SlideBase.js:348 只扫直接子级，grpSp 内部子形状不参与匹配——grpSp 自身可为占位符） */
+  phGlyphs: { ph: PhGlyph; v: XEl }[]
 }
 
 interface Master extends Part {
@@ -160,20 +162,24 @@ function phOf(el: XEl): { type: string; idx?: string } | undefined {
 
 const masterType = (t: string) => (t === 'ctrTitle' ? 'title' : t === 'subTitle' || t === 'obj' ? 'body' : t)
 
+/** spTree 直接子级的占位符序列（文档顺序）。sdkjs getMatchingShape 只遍历 cSld.spTree 直接子级
+ *  （SlideBase.js:348），组内子形状不入匹配表；grpSp 自身带 p:ph 则是占位符组。 */
 function indexPlaceholders(spTree: XEl | undefined) {
-  const byIdx = new Map<string, XEl>()
-  const byType = new Map<string, XEl>()
-  const visit = (tree: XEl | undefined) => {
-    for (const c of tree?.c ?? []) {
-      if (c.n === 'grpSp') visit(c)
-      const ph = phOf(c)
-      if (!ph) continue
-      if (ph.idx !== undefined && !byIdx.has(ph.idx)) byIdx.set(ph.idx, c)
-      if (!byType.has(ph.type)) byType.set(ph.type, c)
-    }
+  const phGlyphs: { ph: PhGlyph; v: XEl }[] = []
+  for (const c of spTree?.c ?? []) {
+    const ph = phOf(c)
+    if (ph) phGlyphs.push({ ph, v: c })
   }
-  visit(spTree)
-  return { byIdx, byType }
+  return { phGlyphs }
+}
+
+/** getIsSingleBody（ShapePrototype.js:685-701）：自身为 body/null 占位符，且同 spTree
+ *  直接子级无其他 type==='body' 占位符。glyphs 为该 part 的占位符序列，self 为自身元素。 */
+function isSingleBody(glyphs: { ph: PhGlyph; v: XEl }[], self: XEl): boolean {
+  const mine = phOf(self)
+  if (!mine) return false
+  if (mine.type !== 'body') return false
+  return !glyphs.some((g) => g.v !== self && g.ph.type === 'body')
 }
 
 function romanize(n: number): string {
@@ -834,19 +840,21 @@ class SlideRenderer {
 
   // ---- shape tree ----------------------------------------------------------------
 
+  /** 占位符继承链（getHierarchy，Shape.js:1709-1753）：查询用形状**自身** ph（非 layout 派生型），
+   *  layout 查询带自身 bSingleBody，master 查询硬编码 true；链序 master→layout→self
+   *  （recalculateBodyPr 逆序 merge：master 最先、自身最后）。 */
   private inheritChain(el: XEl, part: Part): { chain: XEl[]; ph?: { type: string; idx?: string } } {
     const ph = phOf(el)
     if (!ph) return { chain: [el] }
     const chain: XEl[] = []
-    const t = masterType(ph.type)
-    if (part === this.slide) {
-      const lph = this.layout ? (ph.idx !== undefined ? this.layout.byIdx.get(ph.idx) : undefined) ?? this.layout.byType.get(ph.type) : undefined
-      const lt = lph ? phOf(lph)?.type ?? t : t
-      const mph = this.master?.byType.get(masterType(lt)) ?? this.master?.byType.get(t)
+    if (part === this.slide && this.layout) {
+      const single = isSingleBody(part.phGlyphs, el)
+      const lph = matchPlaceholder(this.layout.phGlyphs, ph.type, ph.idx, single).shape
+      const mph = matchPlaceholder(this.master?.phGlyphs ?? [], ph.type, ph.idx, true).shape
       if (mph) chain.push(mph)
       if (lph) chain.push(lph)
     } else if (part === this.layout) {
-      const mph = this.master?.byType.get(t)
+      const mph = matchPlaceholder(this.master?.phGlyphs ?? [], ph.type, ph.idx, true).shape
       if (mph) chain.push(mph)
     }
     chain.push(el)

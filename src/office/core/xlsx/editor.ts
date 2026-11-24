@@ -10,7 +10,7 @@ import {
   type RChild, type RNode,
 } from '../raw'
 import { parseXml } from '../xml'
-import { BUILTIN_FORMATS, isDateFormat } from './numfmt'
+import { BUILTIN_FORMATS, formatValue, isDateFormat } from './numfmt'
 import { fillTrendStep, seriesValueAt } from './series'
 import { fillSeriesFormula, seriesCellFormula } from './seriesformula'
 import {
@@ -19,6 +19,7 @@ import {
 } from './rowpatch'
 import { posTo, rewriteAnchor } from './drawanchor'
 import { parseSheetStyles } from './styles'
+import { MAX_ROW_H_PX, autoFitColPx, ptToPx, pxToPt } from './colwidth'
 import type { BookOp, BorderKind, CellInput, ColInfo, DefinedName, FillMode, FindOptions, FmtPatch, Merge, Range, SeriesType, SeriesUnit, SheetOp, SheetProgress, XlsxDrawingInfo, XlsxDrawingOp, XlsxDrawingsResult, XlsxEditResult, XlsxFormulaCell, XlsxImageOp, XlsxImageResult, XlsxStats } from './types'
 import { materializeShared, restore, setColWidth, setMerge, setRowHeight, shiftSheet, snapshot, type Snapshot } from './structure'
 import { renameSheetInFormula, translateFormula } from './formula'
@@ -579,10 +580,10 @@ export class XlsxEditor {
     return d.defaultColW ?? 64
   }
 
-  /** row height of row `r` in px (mirrors rowSizesOf) */
+  /** row height of row `r` in px (mirrors rowSizesOf; ht→px 走 colwidth.ptToPx) */
   private rowPx(d: SheetData, r: number): number {
     const a = d.rowAttrs.get(r)
-    if (a) return a.hidden ? 0 : a.ht !== undefined ? Math.round((a.ht * 4) / 3) : (d.autoRowH.get(r) ?? d.defaultRowH ?? 20)
+    if (a) return a.hidden ? 0 : a.ht !== undefined ? ptToPx(a.ht) : (d.autoRowH.get(r) ?? d.defaultRowH ?? 20)
     return d.autoRowH.get(r) ?? d.defaultRowH ?? 20
   }
 
@@ -1418,6 +1419,96 @@ export class XlsxEditor {
     }
   }
 
+  /** 单元格显示文本（tm.width 的测量对象；sdkjs measureString 吃的是格式化后的显示串） */
+  private shownText(d: SheetData, e: Entry | null): string {
+    if (!e) return ''
+    const t = e[0]
+    if (t === T_SST) return this.wb.sst[e[1] as number] ?? ''
+    if (t === T_BOOL) return e[1] ? 'TRUE' : 'FALSE'
+    if (t === T_NUM) return formatValue(e[1] as number, this.wb.styles.xfs[e[2] as number]?.numFmt, this.wb.date1904).text
+    if (t === T_ERR || t === T_DATE) return String(e[1])
+    return String(e[1] ?? '')
+  }
+
+  /**
+   * P5 autoFit 列宽（_autoFitColumnWidth WorksheetView.js:19335-19432，无合并/旋转支）：
+   * 逐格 tm.width = 内核 textPx（显示串 × 格字号），列取 max → +ppb → chars → clamp 255
+   * → mcw → px。仅当结果 > 现状才写（sdkjs 同规：autoFit 语义 = 撑到容得下）。
+   */
+  private async autoFitCols(sheet: number, c0: number, c1: number): Promise<XlsxEditResult> {
+    const d = this.sheet(sheet)
+    const m = d.metrics
+    if (!m) throw new Error('metrics not ready (import path)')
+    await this.wb.ensure(d, 0, Math.max(0, d.maxRow))
+    const before = layoutState(d)
+    const maxR = Math.max(0, d.maxRow)
+    for (let c = c0; c <= c1; c++) {
+      let tmw = 0
+      for (let r = 0; r <= maxR; r++) {
+        const row = d.rows[r]
+        if (!row) continue
+        for (let k = 0; k < row.length; k += 4) {
+          if (row[k] !== c) continue
+          const e: Entry = [row[k + 1] as number, row[k + 2], row[k + 3] as number]
+          const text = this.shownText(d, e)
+          if (!text) continue
+          const pt = this.wb.styles.xfs[e[2]]?.fontPt ?? m.basePt
+          const w = m.textPx(text, pt)
+          if (w > tmw) tmw = w
+        }
+      }
+      if (!tmw) continue
+      const px = autoFitColPx(tmw, m.conv)
+      const cur = this.colPx(d, c)
+      if (px > cur) setColWidth(d, c, c, px)
+    }
+    const ch: Change = { sheet, cells: [], range: { r0: 0, c0, r1: Math.max(0, d.maxRow), c1 }, lay: { before, after: layoutState(d) } }
+    this.undoStack.push(ch)
+    this.redoStack = []
+    return { sheet, range: ch.range, layout: this.layout(sheet) }
+  }
+
+  /**
+   * P5 autoFit 行高（_updateRowHeight WorksheetView.js:10430-10499 的显式触发版）：
+   * 无 customHeight 行 → newHeight = min(maxRowH, max(oldH, tm.height))。tm.height =
+   * 行内逐格 max（字号 th × 显示串 \n 段数；v1 wrap 折行未接 —— 升级路径：接 flow 断行）。
+   * autoFit 命令语义 = 强制重算（与加载侧自适应同式，只是无视「只增不减」的旧高缓存）。
+   */
+  private async autoFitRows(sheet: number, r0: number, r1: number): Promise<XlsxEditResult> {
+    const d = this.sheet(sheet)
+    const m = d.metrics
+    if (!m) throw new Error('metrics not ready (import path)')
+    await this.wb.ensure(d, r0, r1)
+    const before = layoutState(d)
+    for (let r = r0; r <= r1; r++) {
+      const a = d.rowAttrs.get(r)
+      if (a?.hidden) continue
+      const row = d.rows[r]
+      let tm = 0
+      if (row) {
+        for (let k = 0; k < row.length; k += 4) {
+          const e: Entry = [row[k + 1] as number, row[k + 2], row[k + 3] as number]
+          const text = this.shownText(d, e)
+          if (!text) continue
+          const pt = this.wb.styles.xfs[e[2]]?.fontPt ?? m.basePt
+          const lines = text.split('\n').length
+          const h = m.rowH(pt) * lines
+          if (h > tm) tm = h
+        }
+      }
+      const oldH = a?.ht !== undefined ? ptToPx(a.ht) : (d.autoRowH.get(r) ?? d.defaultRowH)
+      const nh = Math.min(MAX_ROW_H_PX, Math.max(oldH, tm))
+      if (nh === oldH) continue
+      if (a?.ht !== undefined) d.rowAttrs.set(r, { ...a, ht: pxToPt(nh) })
+      else d.autoRowH.set(r, nh)
+      d.dirtyRows.add(r)
+    }
+    const ch: Change = { sheet, cells: [], range: { r0, c0: 0, r1, c1: Math.max(0, d.maxCol) }, lay: { before, after: layoutState(d) } }
+    this.undoStack.push(ch)
+    this.redoStack = []
+    return { sheet, range: ch.range, layout: this.layout(sheet) }
+  }
+
   private async allSheets(): Promise<{ name: string; d: SheetData }[]> {
     await Promise.all(this.wb.sheets.map((s) => this.wb.loadSheet(s.index, () => {})))
     return this.wb.sheets.map((s) => ({ name: s.name, d: this.wb.sheetsData.get(s.index)! }))
@@ -1503,8 +1594,21 @@ export class XlsxEditor {
         })
       case 'colWidth':
         return lay(() => setColWidth(d, op.c0, op.c1, op.px))
+      case 'colWidthChars':
+        // chars → mcw → px 三段式（setColWidth Workbook.js:8863：width=charCountToModelColWidth(chars)
+        // → 0 即隐藏；渲染 px = modelColWidthToColWidth(mcw)）
+        return lay(() => {
+          const m = d.metrics
+          const px = m ? m.conv.toPx(op.chars) : Math.max(1, Math.floor(op.chars * 7 + 5))
+          if (op.chars <= 0 || px <= 0) hideCols(d, op.c0, op.c1, true)
+          else setColWidth(d, op.c0, op.c1, px)
+        })
       case 'rowHeight':
         return lay(() => setRowHeight(d, op.r0, op.r1, op.px))
+      case 'autoFitCols':
+        return this.autoFitCols(sheet, op.c0, op.c1)
+      case 'autoFitRows':
+        return this.autoFitRows(sheet, op.r0, op.r1)
       case 'freeze':
         return lay(() => {
           d.frozen = { rows: op.rows, cols: op.cols }

@@ -118,6 +118,10 @@ export interface AnimSeqItem {
   preset: AnimPreset
   /** PowerPoint 的 presetClass */
   cls: 'entr' | 'emph' | 'exit'
+  /** cTn@dur（毫秒，parseInt 口径）；缺省 undefined（sdkjs Unspecified）。'indefinite' → Infinity（Indefinite） */
+  dur?: number
+  /** 首个 stCondLst/cond@delay（毫秒，同 parseTimeValue 口径）；缺省 undefined，'indefinite' → Infinity */
+  delay?: number
 }
 
 /** `top`: id of the slide-level element (selection / move); `sid`: own id of a text shape (text editing) */

@@ -5,6 +5,7 @@
 import { shiftFormula, translateFormula } from './formula'
 import type { ColInfo, Merge, Range } from './types'
 import { MAX_COL, type SheetData } from './workbook'
+import { MAX_ROW_H_PX, charCountToModelColWidth, modelColWidthToColWidth, paddingOf, pxToPt } from './colwidth'
 
 export interface Snapshot {
   rows: (unknown[] | undefined)[]
@@ -183,14 +184,18 @@ export function setColWidth(d: SheetData, c0: number, c1: number, px: number) {
       if (ci.max > c1) out.push({ ...ci, min: c1 + 1 })
     }
   }
-  out.push({ min: c0, max: c1, w: Math.max(0, Math.round(px)) })
+  // 渲染 px clamp：[1, 255 字符]（c_oAscMaxColumnWidth=255；隐藏走 w=0 分支）
+  const mdw = d.metrics?.conv.mdw ?? 7
+  const maxPx = modelColWidthToColWidth(charCountToModelColWidth(255, mdw, paddingOf(mdw).ppb), mdw)
+  out.push({ min: c0, max: c1, w: Math.max(0, Math.min(maxPx, Math.round(px))) })
   d.colInfo = out.sort((a, b) => a.min - b.min)
   d.dirtyCols = true
 }
 
 export function setRowHeight(d: SheetData, r0: number, r1: number, px: number) {
   for (let r = r0; r <= r1; r++) {
-    d.rowAttrs.set(r, px > 0 ? { ht: +(px * 0.75).toFixed(2) } : { ...(d.rowAttrs.get(r) ?? {}), hidden: true })
+    // ht（px→pt）走 convertPxToPt 百分位 ceil（colwidth.pxToPt 单一实现）；clamp 409.5pt 上限
+    d.rowAttrs.set(r, px > 0 ? { ht: pxToPt(Math.min(MAX_ROW_H_PX, px)) } : { ...(d.rowAttrs.get(r) ?? {}), hidden: true })
     d.dirtyRows.add(r)
   }
 }

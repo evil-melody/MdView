@@ -4,7 +4,7 @@
  * composition (Vietnamese Telex/VNI, CJK…) is committed on `compositionend`.
  */
 import {
-  collapsed, deleteRange, insertText, marksAt, nextBoundary, normalize, plen, prevBoundary, runAt, runsText, shiftPa, splitRuns, withMarks,
+  collapsed, deleteRange, insertText, marksAt, nextBoundary, normalize, plen, prevBoundary, runAt, runsText, shiftPa, slicePlain, splitRuns, withMarks,
   type Pos, type RRun, type Sel,
 } from './rich'
 
@@ -60,6 +60,34 @@ export function ordered(host: RichHost, s: Sel): [Pos, Pos] {
 
 const caret = (p: Pos): Sel => ({ a: p, f: p })
 const sameSel = (a: Sel, b: Sel) => a.a.pa === b.a.pa && a.a.o === b.a.o && a.f.pa === b.f.pa && a.f.o === b.f.o
+
+/**
+ * P4a 行级 DOM 的软换行是块级 div 边界 → Selection.toString() 给每行边界补伪 '\n'，
+ * 粘贴时 opInsert 按 '\n' 拆段 = 静默固化段落结构。选区纯文本一律走模型切片：
+ * 真 w:br 在模型里就是 text run 的 '\n' 字符，slicePlain 天然保留、伪换行不存在。
+ * 跨段选区逐段切片以 '\n' 相连（段落分隔是真换行，语义正确）。
+ * 返回 null = 无选区或不可跨（表格/分栏边界）→ 调用方放弃拦截走浏览器默认。
+ */
+export function selPlain<P extends RichPara>(host: RichHost<P>, sel: Sel): string | null {
+  if (collapsed(sel)) return null
+  const [s, en] = ordered(host, sel)
+  if (s.pa === en.pa) {
+    const p = host.para(s.pa)
+    if (!p) return null
+    return slicePlain(p.runs as RRun[], s.o, en.o)
+  }
+  const pas = host.span(s.pa, en.pa)
+  if (!pas) return null
+  const parts: string[] = []
+  for (let i = 0; i < pas.length; i++) {
+    const p = host.para(pas[i])
+    if (!p) return null
+    const from = i === 0 ? s.o : 0
+    const to = i === pas.length - 1 ? en.o : plen(p.runs as RRun[])
+    parts.push(slicePlain(p.runs as RRun[], from, to))
+  }
+  return parts.join('\n')
+}
 
 // ---------------------------------------------------------------- model operations
 
@@ -235,16 +263,22 @@ export function posFromDom(root: HTMLElement, node: Node, offset: number): Pos |
   if (!pel || !root.contains(pel)) return null
   const pa = pel.dataset.pa!
   if (!runSpan(node, pel)) {
-    // boundary between runs: end of the last run span before the point
+    // boundary between runs. P4a 行级下相邻 span 之间有 w:br 空洞（'\n' 被 lines.ts
+    // 从切片剔除）：旧口径取「点前末 span 末端」= break 偏移，打字会插到 break 之前
+    // （视觉跳回上一行尾）。改为「点后首 span 起点」优先——跨行边界 (line k+1, 0)
+    // 语义 = break 之后（行 k+1 首）；普通相邻边界两点重合，行为不变。
     const r = document.createRange()
     r.setStart(node, offset)
     r.collapse(true)
-    let o = 0
+    let prevEnd = 0
     for (const sp of Array.from(pel.querySelectorAll<HTMLElement>('[data-o]'))) {
-      if (r.comparePoint(sp, sp.childNodes.length) < 0) o = spanEnd(sp)
-      else break
+      if (r.comparePoint(sp, 0) >= 0) {
+        const o0 = Number(sp.dataset.o)
+        return { pa, o: o0 > prevEnd ? o0 : prevEnd }
+      }
+      prevEnd = spanEnd(sp)
     }
-    return { pa, o }
+    return { pa, o: prevEnd }
   }
   const span = runSpan(node, pel)!
   const base = Number(span.dataset.o)
@@ -351,6 +385,8 @@ export class RichInput {
     root.addEventListener('compositionstart', this.onCompStart)
     root.addEventListener('compositionend', this.onCompEnd)
     root.addEventListener('keydown', this.onKeyDown)
+    root.addEventListener('copy', this.onCopyCut)
+    root.addEventListener('cut', this.onCopyCut)
     document.addEventListener('selectionchange', this.onSelChange)
   }
 
@@ -361,6 +397,8 @@ export class RichInput {
     r.removeEventListener('compositionstart', this.onCompStart)
     r.removeEventListener('compositionend', this.onCompEnd)
     r.removeEventListener('keydown', this.onKeyDown)
+    r.removeEventListener('copy', this.onCopyCut)
+    r.removeEventListener('cut', this.onCopyCut)
     document.removeEventListener('selectionchange', this.onSelChange)
     cancelAnimationFrame(this.raf)
     this.root = null
@@ -517,13 +555,29 @@ export class RichInput {
     }
   }
 
+    private onCopyCut = (e: ClipboardEvent) => {
+    const sel = this.sel()
+    if (!sel) return
+    // null = 折叠选区或不可跨（表格/分栏边界）→ 浏览器默认（可能带富格式，交给 pasteRich）
+    const text = selPlain(this.host, sel)
+    if (text === null) return
+    e.preventDefault()
+    e.clipboardData?.setData('text/plain', text)
+    if (e.type === 'cut') opDelete(this.host, sel)
+  }
+
+  /** composition start/end notification (5-B：视图据此冻结 v-html 重建，组合不被掐死) */
+  onComposing?: (active: boolean) => void
+
   private onCompStart = () => {
     this.composing = this.sel()
+    this.onComposing?.(true)
   }
 
   private onCompEnd = (e: CompositionEvent) => {
     const sel = this.composing
     this.composing = null
+    this.onComposing?.(false)
     if (!sel) return
     this.justComposed = e.data ?? ''
     // always rebuild the paragraph: the IME mutated its DOM

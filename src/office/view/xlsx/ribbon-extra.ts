@@ -242,56 +242,31 @@ export function makeRibbonExtra(ctx: RibbonCtx): Record<string, (...args: any[])
       return `行高 ${px}px`
     },
     colWidthDlg: async () => {
-      const v = await officePrompt('列宽（像素）', '100', '例如 100')
+      // P5：对话框按「字符数」输入（Excel 同款口径）；内核三段式 chars→px 换算
+      const v = await officePrompt('列宽（字符数）', '8.43', '例如 12')
       if (!v) return ''
-      const px = Number(v)
-      if (!Number.isFinite(px) || px <= 0) return '列宽：请输入正数'
-      await ctx.call('xlsx.sheetOp', ctx.sheet(), { op: 'colWidth', c0: g().c0, c1: g().c1, px })
+      const chars = Number(v)
+      if (!Number.isFinite(chars) || chars <= 0) return '列宽：请输入正数'
+      await ctx.call('xlsx.sheetOp', ctx.sheet(), { op: 'colWidthChars', c0: g().c0, c1: g().c1, chars })
       ctx.reload()
       ctx.changed()
-      return `列宽 ${px}px`
+      return `列宽 ${chars} 字符`
     },
     autoFitCols: async () => {
       const sel = g()
-      const widths = new Map<number, number>()
-      for (const el of qa<HTMLElement>('.ov-cell[data-cell-c]')) {
-        const c = Number(el.dataset.cellC)
-        if (c < sel.c0 || c > sel.c1) continue
-        const span = el.querySelector('span')
-        const w = span ? span.scrollWidth + 14 : 0
-        if (w > (widths.get(c) ?? 0)) widths.set(c, w)
-      }
-      if (!widths.size) return '宽度自动：没有可测量的单元格'
-      for (const [c, w] of widths) {
-        await ctx.call('xlsx.sheetOp', ctx.sheet(), { op: 'colWidth', c0: c, c1: c, px: Math.min(400, Math.max(40, Math.round(w))) })
-      }
+      // P5：内核 autoFit（wasm 度量 tm.width + 三段式），非 DOM scrollWidth 近似
+      await ctx.call('xlsx.sheetOp', ctx.sheet(), { op: 'autoFitCols', c0: sel.c0, c1: sel.c1 })
       ctx.reload()
       ctx.changed()
-      return `宽度自动：已调整 ${widths.size} 列`
+      return `宽度自动：已调整列 ${sel.c0 + 1}-${sel.c1 + 1}`
     },
     autoFitRows: async () => {
       const sel = g()
-      const heights = new Map<number, number>()
-      for (const el of qa<HTMLElement>('.ov-cell[data-cell-r]')) {
-        const r = Number(el.dataset.cellR)
-        if (r < sel.r0 || r > sel.r1) continue
-        const span = el.querySelector('span')
-        const text = span?.textContent ?? ''
-        if (!text) continue
-        const col = Number(el.dataset.cellC)
-        const cw = el.getBoundingClientRect().width || 80
-        const lines = Math.max(1, Math.ceil((span?.scrollWidth ?? cw) / Math.max(20, cw - 8)))
-        const h = lines * 18 + 6
-        if (h > (heights.get(r) ?? 0)) heights.set(r, h)
-        void col
-      }
-      if (!heights.size) return '高度自动：没有可测量的单元格'
-      for (const [r, h] of heights) {
-        await ctx.call('xlsx.sheetOp', ctx.sheet(), { op: 'rowHeight', r0: r, r1: r, px: Math.round(h) })
-      }
+      // P5：内核行高自适应（度量 th × \n 段数），非 lines*18+6 启发式
+      await ctx.call('xlsx.sheetOp', ctx.sheet(), { op: 'autoFitRows', r0: sel.r0, r1: sel.r1 })
       ctx.reload()
       ctx.changed()
-      return `高度自动：已调整 ${heights.size} 行`
+      return `高度自动：已调整行 ${sel.r0 + 1}-${sel.r1 + 1}`
     },
 
     // ---------------- 定位 / 公式栏

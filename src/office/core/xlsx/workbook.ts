@@ -7,6 +7,7 @@ import { Calc } from './calc'
 import { kid, kids, num, parseXmlStream, type Attrs, type SaxHandler } from '../xml'
 import { formatValue, formatText } from './numfmt'
 import { parseSheetStyles, type SheetStyles } from './styles'
+import { MAX_ROW_H_PX, defaultColWidthPx, defaultRowHeightPx, makeCellMetrics, ptToPx, type CellMetrics } from './colwidth'
 import type { BlockOut, CellDetail, CellOut, ColInfo, FindMatch, FindOptions, Merge, XlsxPageSetup, RowOut, SheetInfo, SheetProgress, WorkbookMeta } from './types'
 
 export const T_NUM = 0
@@ -44,10 +45,6 @@ export function colName(c: number): string {
   return s
 }
 
-/** Excel 列宽（字符数）→ px；MDW=7 + 5px padding，8.43 → 64px */
-export function colWidthPx(width: number): number {
-  return Math.max(1, Math.floor(width * 7 + 5))
-}
 
 export function parseRef(ref: string): [number, number] {
   let i = 0
@@ -100,6 +97,8 @@ export class SheetData {
   colInfo: ColInfo[] = []
   defaultColW = 64
   defaultRowH = 20
+  /** P5 单元格度量门面（列宽三段式 conv / 行高 rowH / 文本宽 textPx）；import loader 路径可为空 */
+  metrics?: CellMetrics
   frozen = { rows: 0, cols: 0 }
   gridLines = true
   done = false
@@ -124,8 +123,13 @@ class SheetHandler implements SaxHandler {
   private rowHasHt = false
   private rowMaxPt = 0
 
-  /** fontPt: font size per cell format, used to auto-grow rows without explicit height */
-  constructor(private d: SheetData, private fontPt: number[] = [], private basePt = 11) {}
+  /** metrics: P5 单元格度量门面（列宽/行高/文本宽的权威口径）；fontPt: 每 cell format 字号 */
+  constructor(private d: SheetData, private metrics: CellMetrics, private fontPt: number[] = []) {
+    this.d.metrics = metrics
+    // 无 sheetFormatPr 时的基准：sdkjs :623-643 总是计算（base=8 → 64px、度量 th → 默认行高）
+    this.d.defaultColW = defaultColWidthPx(metrics.conv, undefined, undefined)
+    this.d.defaultRowH = defaultRowHeightPx(false, undefined, metrics.baseThPx)
+  }
 
   open(name: string, a: Attrs): boolean | void {
     switch (name) {
@@ -167,26 +171,30 @@ class SheetHandler implements SaxHandler {
         this.rowMaxPt = 0
         if (hidden) this.newSizes.push([this.row, 0])
         else if (a.ht) {
-          const px = Math.round((Number(a.ht) * 4) / 3)
+          // ht（pt）→ px：convertPtToPx trunc 口径（utils.js:182-186），非 Math.round 近似
+          const px = ptToPx(Number(a.ht))
           if (px !== this.d.defaultRowH) this.newSizes.push([this.row, px])
         }
         return
       }
       case 'sheetFormatPr': {
-        const h = num(a.defaultRowHeight)
-        if (h) this.d.defaultRowH = Math.round((h * 4) / 3)
-        const w = num(a.defaultColWidth)
-        const base = num(a.baseColWidth)
-        // Excel 列宽公式：Truncate(((256*w + Truncate(128/MDW))/256)*MDW)，MDW 取默认字体数字宽度 7px。
-        if (w) this.d.defaultColW = colWidthPx(w)
-        else if (base !== undefined) this.d.defaultColW = colWidthPx(base + 0.43)
+        // 默认行高：customHeight="1" 时 defaultRowHeight（pt）主导，否则 = 默认字体度量 th
+        // （WorksheetView.js:641-643 / getDefaultHeight Workbook.js:9262-9269）
+        this.d.defaultRowH = defaultRowHeightPx(
+          a.customHeight === '1' || a.customHeight === 'true',
+          num(a.defaultRowHeight),
+          this.metrics.baseThPx,
+        )
+        // 默认列宽：defaultColWidth（chars）存在 → 三段式覆盖；否则 base(||8) → ceil8（:623-631）
+        this.d.defaultColW = defaultColWidthPx(this.metrics.conv, num(a.baseColWidth), num(a.defaultColWidth))
         return
       }
       case 'col': {
         const min = Number(a.min) - 1
         const max = Math.min(Number(a.max) - 1, MAX_COL - 1)
         const hidden = a.hidden === '1' || a.hidden === 'true'
-        const w = hidden ? 0 : a.width ? colWidthPx(Number(a.width)) : this.d.defaultColW
+        // width 属性 = ECMA chars 口径 → 三段式 chars→px（initColumn Workbook.js:7668 同式）
+        const w = hidden ? 0 : a.width ? this.metrics.conv.toPx(Number(a.width)) : this.d.defaultColW
         this.d.colInfo.push({ min, max, w })
         return
       }
@@ -277,23 +285,31 @@ class SheetHandler implements SaxHandler {
         }
         cells.push(c, type, v, this.cStyle)
         if (!this.rowHasHt) {
-          const pt = this.fontPt[this.cStyle] ?? this.basePt
+          const pt = this.fontPt[this.cStyle] ?? this.metrics.basePt
           if (pt > this.rowMaxPt) this.rowMaxPt = pt
         }
         return
       }
-      case 'row':
-        if (!this.rowHasHt && this.rowMaxPt > this.basePt * 1.15) {
-          const px = Math.round(this.rowMaxPt * (4 / 3) * 1.3 + 3)
-          if (px > this.d.defaultRowH) {
-            this.newSizes.push([this.row, px])
-            this.d.autoRowH.set(this.row, px)
+      case 'row': {
+        // 行高自适应（_updateRowHeight WorksheetView.js:10483-10489）：无 customHeight 且
+        // 非跨行合并 → newHeight = min(maxRowH, max(oldH, tm.height))。oldH = 默认行高
+        // （无显式 ht 时）；tm.height = 行内最大字号的单行度量 th（v1：wrap 折行未接，
+        // 显式 \n 段数在编辑侧 autoFitRows 处理）。启发式 rowMaxPt*(4/3)*1.3+3 作废。
+        if (!this.rowHasHt) {
+          const pt = this.rowMaxPt || this.metrics.basePt
+          const tm = Math.min(MAX_ROW_H_PX, this.metrics.rowH(pt))
+          const oldH = this.d.defaultRowH
+          const nh = Math.min(MAX_ROW_H_PX, Math.max(oldH, tm))
+          if (nh !== oldH) {
+            this.newSizes.push([this.row, nh])
+            this.d.autoRowH.set(this.row, nh)
           }
         }
         if (this.rowCells && this.rowCells.length) this.d.rows[this.row] = this.rowCells
         if (this.row > this.d.maxRow) this.d.maxRow = this.row
         this.rowCells = null
         return
+      }
     }
   }
 
@@ -426,8 +442,13 @@ export class XlsxWorkbook {
         }
         const loader = this.loaders.get(info.path)
         let sizes: [number, number][] = []
+        // P5：默认字体 + 出现过的字号集一次性预热度量门面，解析全程同步消费
+        const metrics = await makeCellMetrics(this.styles.baseFontName, this.styles.basePt, this.styles.xfs.map((x) => x.fontPt))
         if (loader) {
           // the rows come from somewhere else than the sheet's XML (a text file being imported)
+          d.metrics = metrics
+          d.defaultColW = defaultColWidthPx(metrics.conv, undefined, undefined)
+          d.defaultRowH = defaultRowHeightPx(false, undefined, metrics.baseThPx)
           const rep: LoadReport = {
             chunk: () => report(true, () => []),
             reset: () => {
@@ -437,7 +458,7 @@ export class XlsxWorkbook {
           }
           await loader(d, rep)
         } else {
-          const h = new SheetHandler(d, this.styles.xfs.map((x) => x.fontPt), this.styles.xfs[0]?.fontPt ?? 11)
+          const h = new SheetHandler(d, metrics, this.styles.xfs.map((x) => x.fontPt))
           await parseXmlStream(await this.pkg.stream(info.path, (l, t) => onBytes?.('sheet', l, t)), h, {
             onChunk: () => report(h.headerReady, () => h.newSizes.splice(0)),
           })
@@ -667,6 +688,7 @@ export class XlsxWorkbook {
 export function rowSizesOf(d: SheetData): [number, number][] {
   const out: [number, number][] = []
   for (const [r, px] of d.autoRowH) if (!d.rowAttrs.has(r)) out.push([r, px])
-  for (const [r, a] of d.rowAttrs) out.push([r, a.hidden ? 0 : a.ht !== undefined ? Math.round((a.ht * 4) / 3) : (d.autoRowH.get(r) ?? d.defaultRowH)])
+  // ht（pt）→ px 走 convertPtToPx trunc 口径（colwidth.ptToPx 单一实现，非 Math.round 近似）
+  for (const [r, a] of d.rowAttrs) out.push([r, a.hidden ? 0 : a.ht !== undefined ? ptToPx(a.ht) : (d.autoRowH.get(r) ?? d.defaultRowH)])
   return out
 }

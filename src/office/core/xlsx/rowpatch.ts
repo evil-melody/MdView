@@ -12,6 +12,7 @@ import {
 } from './workbook'
 import type { BorderKind, ColInfo, XlsxPageSetup, Range } from './types'
 import { injectPageElements } from './sheetopts'
+import { colWidthToCharCount } from './colwidth'
 
 export interface LayoutState {
   merges?: MergeLike[]
@@ -212,7 +213,12 @@ export class RowPatcher {
     const P = this.P
     const cols = [...this.d.colInfo].sort((a, b) => a.min - b.min)
     if (!cols.length) return ''
-    return `<${P}cols>${cols.map((c) => `<${P}col min="${c.min + 1}" max="${c.max + 1}" width="${+(Math.max(0, (c.w || c.prevW || 0) - 5) / 7).toFixed(4)}" customWidth="1"${c.w ? '' : ' hidden="1"'}/>`).join('')}</${P}cols>`
+    // px → chars 走内核反算（colWidthToCharCount，三段式第三段）；旧 (px-5)/7 近似作废。
+    // metrics 缺失（import loader 未接线的极端路径）回退 mdw=7/ppb=5 常量。
+    const mdw = this.d.metrics?.conv.mdw ?? 7
+    const ppb = this.d.metrics?.conv.ppb ?? 5
+    const width = (px: number) => colWidthToCharCount(px, mdw, ppb).toFixed(4)
+    return `<${P}cols>${cols.map((c) => `<${P}col min="${c.min + 1}" max="${c.max + 1}" width="${width(Math.max(0, c.w || c.prevW || 0))}" customWidth="1"${c.w ? '' : ' hidden="1"'}/>`).join('')}</${P}cols>`
   }
 
   private headFix(head: string): string {

@@ -6,13 +6,15 @@
 import { ref, shallowRef, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import type { DocumentClient } from '../client'
 import type { Block, DocxMeta } from '../client'
-import { blocksHtml, estimateHeight } from '../docx-render'
+import { blocksHtml } from '../docx-render'
 import { MediaCache } from '../media'
 import { officePrompt, officeAlert } from './officePrompt'
-import { paginate } from '../view/docx/paginate'
+import { flowPaginate } from '../view/docx/flow'
+import type { PageSlice } from '../view/docx/paginate'
 import { DocxEditor, type DocState, type FormatState } from '../view/docx/DocxEditor'
 import { installImagePaste } from '../view/docx/imagepaste'
 import { deleteRange, insertText, runsText, type RRun, type Sel } from '../view/edit/rich'
+import { selPlain } from '../view/edit/input'
 import type { ParaDirty, RunSet, CanonStyle, PageSet, ParaStyle, RunStyle, WrapSpec, WrapKind, WrapPos, WrapRel, WrapAlign, Crop, HFKind, HFLine } from '../core/docx/types'
 import { hfBlocksOf, hfEditHtml, hfEditKind, hfHtml, hfLinesFrom, hfLinesOf, hfStyle } from '../view/docx/hf'
 import { cropFromDrag, cropOfSelected, cropPreview, setImageCrop } from '../view/docx/crop'
@@ -155,11 +157,7 @@ const GAP = 16
 const bar = reactive({ zoom: 1, readMode: false, tracking: false, titlePg: false, painter: false })
 const rawPageW = computed(() => (meta.value?.page.w ?? 612) * PT)
 const pageW = computed(() => rawPageW.value * bar.zoom)
-/** 分页按原始纸张高度计算，缩放只作用于视觉层 */
-const pageAvail = computed(() => {
-  const p = meta.value?.page
-  return p ? (p.h - p.mt - p.mb) * PT : 900
-})
+// P2 起分页在内核按 pt 结算（h−mt−mb），px 口径的 pageAvail 随 DOM 测量回环一并移除
 const pageH = computed(() => (meta.value?.page.h ?? 792) * PT * bar.zoom)
 /** 页面字体 / 字号 / 页边距取自文档自身，避免所有 docx 被渲染成同一套版式 */
 const pageStyle = computed(() => {
@@ -231,23 +229,56 @@ function columnPointerDown(e: PointerEvent) {
   }))
 }
 
-const pages = computed(() => {
-  void version.value
-  return paginate(
-    st.blocks, st.heights, st.blocks.length, pageAvail.value,
-    meta.value?.page.cols ?? 1,
-    meta.value?.final ? meta.value.sectKind ?? 'nextPage' : 'nextPage',
-    st.rowHeights
-  )
-})
+/* ---- P2 分页：内核自算行高（core/docx/layout + 字体 wasm 度量），弃 DOM 测量回环 ---- */
+const pages = ref<PageSlice[]>([])
+/** 竞态令牌：编辑连击下 version 多次递增，只认最后一次的结果 */
+let flowSeq = 0
+/** pages 计算所基于的块树版本。P4a 后 frag 恒物化（每段都有行区间）——
+ *  新文本 × 旧 frag 错配 = 尾字吞没 + 行数不对 + 光标被第二次渲染抹掉（postRender
+ *  在错配帧消费掉 pendingSel）。错配帧回退块级渲染（浏览器断行）且不消费选区。 */
+const pagesVer = ref(-1)
+async function repaginate() {
+  const seq = ++flowSeq
+  const v = version.value
+  const m = meta.value
+  try {
+    const slices = await flowPaginate(st.blocks, {
+      page: m?.page ?? { w: 612, h: 792, mt: 72, mr: 72, mb: 72, ml: 72, header: 36, footer: 36 },
+      font: m?.font ?? 'Times New Roman',
+      sz: m?.sz ?? 10,
+      lastKind: m?.final ? m.sectKind ?? 'nextPage' : 'nextPage',
+    })
+    if (seq === flowSeq) { pages.value = slices; pagesVer.value = v }
+  } catch (e) {
+    // 字体内核不可用时保持当前页序（首屏竞态不炸视图）
+    console.warn('[flow] repaginate failed', e)
+  }
+}
+watch([version, () => meta.value?.page], () => void repaginate(), { deep: true })
 const stride = computed(() => pageH.value + GAP)
 const firstPage = computed(() => Math.max(0, Math.floor(scrollTop.value / stride.value) - 1))
 const lastPage = computed(() =>
   Math.min(pages.value.length, firstPage.value + Math.ceil(viewportH.value / stride.value) + 3)
 )
+/** IME 组合中（5-B）：组合期 DOM 由输入法掌管，v-html 重建会掐死进行中的组合。
+ *  visible 冻结在上一帧（分页结果照常落地 pages，组合结束统一补交）。 */
+const composing = ref(false)
+editor.input.onComposing = (active) => {
+  composing.value = active
+  if (!active) pagesTick.value++ // 组合结束：解锁并补交冻结期攒下的页序
+}
+const pagesTick = ref(0)
+/** 最近一次非冻结帧的渲染输出；组合期 visible 直接返回它（getter 内的副作用写入，
+ *  computed 缓存语义不受影响：依赖不变则 getter 不重跑，快照保持上一次的值）。 */
+let visibleSnapshot: { idx: number; html: string }[] = []
 const visible = computed(() => {
   void version.value
-  return pages.value.slice(firstPage.value, lastPage.value).map((slice, i) => {
+  void pagesTick.value
+  if (composing.value && visibleSnapshot.length) return visibleSnapshot
+  // 渲染戳守卫：pages/frags 还是旧块树的切片时，新文本 × 旧行区间 = 尾字吞没 + 行数不对。
+  // 错配帧不带 frag 渲染（回退块级、浏览器断行兜底），等 repaginate 落地再上内核行。
+  const stale = pagesVer.value !== version.value
+  visibleSnapshot = pages.value.slice(firstPage.value, lastPage.value).map((slice, i) => {
     const idx = firstPage.value + i
     return {
       idx,
@@ -256,10 +287,12 @@ const visible = computed(() => {
         page: idx,
         pages: pages.value.length,
         offset: slice.start,
-        frags: slice.frags
+        frags: stale ? undefined : slice.frags,
+        paras: stale ? undefined : slice.paras
       })
     }
   })
+  return visibleSnapshot
 })
 const topPad = computed(() => firstPage.value * stride.value)
 const bottomPad = computed(() => Math.max(0, pages.value.length - lastPage.value) * stride.value)
@@ -510,18 +543,29 @@ function ptInPara(pel: HTMLElement, o: number, end = false): [Node, number] | nu
   for (const sp of spans) {
     if (sp.hasAttribute('data-empty')) continue
     const o0 = Number(sp.dataset.o)
+    // P4a 行级：w:br 被 lines.ts 剔除 → 相邻 span 之间存在偏移空洞。
+    // o 落洞（o < o0）→ 吸附到前一个 span 末端（无前 span 则本 span 起点），
+    // 否则 setEnd(t, 负数) 抛 IndexSizeError，查找高亮整功能死。
+    if (o < o0) return last ?? ptHead(sp)
     const n = sp.hasAttribute('data-obj') ? 1 : (sp.textContent?.length ?? 0)
     if (o < o0 + n) {
-      if (sp.hasAttribute('data-obj')) {
-        const parent = sp.parentNode
-        return parent ? [parent, Array.prototype.indexOf.call(parent.childNodes, sp)] : null
-      }
+      if (sp.hasAttribute('data-obj')) return ptAfter(sp)
       const t = sp.firstChild
       return t ? [t, o - o0] : null
     }
     if (sp.firstChild) last = [sp.firstChild, sp.textContent?.length ?? 0]
   }
   return end ? last : null
+}
+
+/** 对象 span 的前/后元素级位置（父容器 child 索引） */
+function ptHead(sp: HTMLElement): [Node, number] {
+  const parent = sp.parentNode!
+  return [parent, Array.prototype.indexOf.call(parent.childNodes, sp)]
+}
+function ptAfter(sp: HTMLElement): [Node, number] {
+  const parent = sp.parentNode!
+  return [parent, Array.prototype.indexOf.call(parent.childNodes, sp) + 1]
 }
 
 function hitRange(hit: DocHit): Range | null {
@@ -604,27 +648,42 @@ function replaceAll() {
   runFindNow(false)
 }
 
-/** Word 右键菜单：Office 风格上下文操作（复制 / 剪切 / 粘贴 / 格式 / 批注 / 链接） */
+/** Word 右键菜单：Office 风格上下文操作（复制 / 剪切 / 粘贴 / 格式 / 批注 / 链接 / 表格） */
 const docMenu = ref<{ x: number; y: number } | null>(null)
-let menuText = ''
+/** 右键时落在表格内：{ n: 覆盖单元格数, merged: 光标格是否合并格 }；菜单据此出表格区 */
+const menuCells = ref<{ n: number; merged: boolean } | null>(null)
+let menuText: string | null = null
 function openDocMenu(ev: MouseEvent) {
-  // 菜单项会抢走焦点，右键时先把选区文本缓存下来
-  menuText = window.getSelection()?.toString() ?? ''
+  // 菜单项会抢走焦点，右键时先把选区文本缓存下来。
+  // 走模型切片（selPlain）而非 DOM toString()：P4a 行级 div 会让后者给软换行补伪
+  // '\n'，粘贴即静默固化段落结构；模型选区在 selectionchange 已捕获，WKWebView 右键
+  // 清 DOM 选区也不影响。null = 无选区/不可跨 → 菜单复制项无意义。
+  const sel = editor.input.sel()
+  menuText = sel ? selPlain(editor, sel) : null
   ev.preventDefault()
+  // WKWebView 右键会先清掉浏览器选区：冻结多格 tint，并把单元格选区快照进内核兜底
+  menuCells.value = editor.cellMenuInfo()
+  editor.setCellsFrozen(true)
   docMenu.value = {
     x: Math.min(ev.clientX, window.innerWidth - 170),
-    y: Math.min(ev.clientY, Math.max(8, window.innerHeight - 320))
+    y: Math.min(ev.clientY, Math.max(8, window.innerHeight - 420))
   }
 }
-async function docPaste() {
+function closeDocMenu() {
   docMenu.value = null
+  menuCells.value = null
+  editor.setCellsFrozen(false)
+}
+async function docPaste() {
+  closeDocMenu()
   let text = ''
   try { text = (await navigator.clipboard?.readText()) ?? '' } catch { /* 无权限时静默 */ }
   if (text) editor.insertText(text)
 }
 /** 复制/剪切走剪贴板 API + 内核删除，不直接 execCommand 改 DOM，避免破坏选区映射 */
 async function docCopy(cut: boolean) {
-  docMenu.value = null
+  closeDocMenu()
+  if (menuText === null) return
   try { await navigator.clipboard?.writeText(menuText) } catch { /* 无权限时静默 */ }
   if (cut && props.editable) editor.deleteSelection()
 }
@@ -956,61 +1015,16 @@ function onPointerUp(e: PointerEvent) {
   d.end()
 }
 
-let measureScheduled = false
-/** 估算块高不含字体 / 行距 / 缩进差异，按真实 DOM 高度写回分页表后逐轮收敛 */
-function measure() {
-  const root = rootEl.value
-  // v-show 隐藏态下块高全为 0，测了只会写回脏值并在恢复时触发多轮收敛
-  if (!root || root.clientWidth === 0) return
-  const zoomH = (node: Element) => node.getBoundingClientRect().height / bar.zoom
-  let changed = false
-  for (const el of root.querySelectorAll<HTMLElement>('.de-block[data-bi]')) {
-    const b = st.blocks[Number(el.dataset.bi)]
-    if (!b) continue
-    if (b.t === 'tbl') {
-      // 逐行测量（续页重复表头行带相同 data-ri，覆盖成同值无害），按原始行号归集；
-      // 未落在可见页的行保留估算值，避免虚拟渲染下丢失高度
-      const n = b.rows.length
-      const fallback = estimateHeight(b) / Math.max(1, n)
-      const prev = st.rowHeights.get(b)
-      const rh = prev && prev.length === n ? prev : new Array(n).fill(fallback)
-      let rowChanged = false
-      const topTable = el.querySelector('table.de-tbl')
-      const trs = topTable ? topTable.querySelectorAll<HTMLTableRowElement>(':scope > tbody > tr[data-ri]') : []
-      for (const tr of trs) {
-        const ri = Number(tr.dataset.ri)
-        if (!(ri >= 0 && ri < n)) continue
-        const line = zoomH(tr)
-        if (line > 0 && Math.abs(line - (rh[ri] ?? 0)) > 0.5) { rh[ri] = line; rowChanged = true }
-      }
-      if (rowChanged) st.rowHeights.set(b, rh)
-      // 整表高取行高之和：分页据此判断，避免"片段 DOM 高度"污染整表测量
-      const total = rh.reduce((a, c) => a + (c || 0), 0)
-      const h = total > 0 ? total + 2 : zoomH(el)
-      if (h > 0 && Math.abs(h - (st.heights.get(b) ?? 0)) > 1) { st.heights.set(b, h); changed = true }
-      if (rowChanged) changed = true
-      continue
-    }
-    const h = zoomH(el)
-    if (h <= 0) continue
-    if (Math.abs(h - (st.heights.get(b) ?? 0)) > 1) {
-      st.heights.set(b, h)
-      changed = true
-    }
-  }
-  if (changed) version.value++
-}
-
-/** v-html 重建会丢 DOM 选区；内核把目标选区留在 pendingSel，渲染后必须消费 */
+/** v-html 重建会丢 DOM 选区；内核把目标选区留在 pendingSel，渲染后必须消费。
+ *  P2 起块高由内核自算（flow.ts），不再有 DOM 测量回环。 */
 async function postRender() {
   await nextTick()
   if (rootEl.value) void media.hydrate(rootEl.value)
   // v-html 重建后命中 Range 失效：按当前 hits 重挂高亮（页外命中自动跳过）
   applyFindMarks()
-  if (!measureScheduled) {
-    measureScheduled = true
-    requestAnimationFrame(() => { measureScheduled = false; measure() })
-  }
+  // 错配帧（visible 回退了块级渲染）不消费 pendingSel：此时 DOM 与目标选区的行结构
+  // 不一致，restore 可能落错位置；留到 pagesVer 追平的下一帧（watch(visible) 再触发）。
+  if (pagesVer.value !== version.value) return
   const sel = editor.pendingSel
   if (!sel) return
   if (editor.input.restore(sel)) {
@@ -1037,15 +1051,13 @@ watch(
 onMounted(() => {
   offs.push(
     props.client.on('docx:blocks', (bs) => {
-      for (const b of bs) {
-        st.blocks.push(b)
-        st.heights.set(b, estimateHeight(b))
-      }
+      for (const b of bs) st.blocks.push(b)
       version.value++
     }),
     props.client.on('docx:meta', (m) => {
       meta.value = m
       editor.styles = m.styles ?? []
+      editor.compatMode = m.compatMode ?? 12
       bar.titlePg = Boolean(m.titlePg)
       version.value++
     }),
@@ -1205,19 +1217,33 @@ onBeforeUnmount(() => {
         </template>
       </div>
     </div>
-    <div v-if="docMenu" class="ov-ctx-overlay" @click="docMenu = null" @contextmenu.prevent="docMenu = null">
+    <div v-if="docMenu" class="ov-ctx-overlay" @click="closeDocMenu" @contextmenu.prevent="closeDocMenu">
       <div class="ov-ctx" :style="{ left: docMenu.x + 'px', top: docMenu.y + 'px' }">
         <button class="ov-ctx-item" @click="docCopy(false)">复制</button>
         <button v-if="editable" class="ov-ctx-item" @click="docCopy(true)">剪切</button>
         <button v-if="editable" class="ov-ctx-item" @click="docPaste">粘贴</button>
         <div v-if="editable" class="ov-ctx-sep"></div>
-        <button v-if="editable" class="ov-ctx-item" @click="docMenu = null; commands.toggle('b')"><b>加粗</b></button>
-        <button v-if="editable" class="ov-ctx-item" @click="docMenu = null; commands.toggle('i')"><i>倾斜</i></button>
-        <button v-if="editable" class="ov-ctx-item" @click="docMenu = null; commands.toggle('u')"><u>下划线</u></button>
-        <button v-if="editable" class="ov-ctx-item" @click="docMenu = null; commands.clearFormat()">清除格式</button>
+        <button v-if="editable" class="ov-ctx-item" @click="closeDocMenu(); commands.toggle('b')"><b>加粗</b></button>
+        <button v-if="editable" class="ov-ctx-item" @click="closeDocMenu(); commands.toggle('i')"><i>倾斜</i></button>
+        <button v-if="editable" class="ov-ctx-item" @click="closeDocMenu(); commands.toggle('u')"><u>下划线</u></button>
+        <button v-if="editable" class="ov-ctx-item" @click="closeDocMenu(); commands.clearFormat()">清除格式</button>
+        <template v-if="editable && menuCells">
+          <div class="ov-ctx-sep"></div>
+          <button v-if="menuCells.n > 1" class="ov-ctx-item" @click="closeDocMenu(); commands.mergeCells()">合并单元格</button>
+          <button v-if="menuCells.merged" class="ov-ctx-item" @click="closeDocMenu(); commands.unmergeCell()">拆分单元格</button>
+          <button class="ov-ctx-item" @click="closeDocMenu(); commands.tableOp('rowAbove')">在上方插入行</button>
+          <button class="ov-ctx-item" @click="closeDocMenu(); commands.tableOp('rowBelow')">在下方插入行</button>
+          <button class="ov-ctx-item" @click="closeDocMenu(); commands.tableOp('colLeft')">在左侧插入列</button>
+          <button class="ov-ctx-item" @click="closeDocMenu(); commands.tableOp('colRight')">在右侧插入列</button>
+          <button class="ov-ctx-item" @click="closeDocMenu(); commands.distributeColumns()">分布列宽</button>
+          <div class="ov-ctx-sep"></div>
+          <button class="ov-ctx-item" @click="closeDocMenu(); commands.tableOp('delRow')">删除行</button>
+          <button class="ov-ctx-item" @click="closeDocMenu(); commands.tableOp('delCol')">删除列</button>
+          <button class="ov-ctx-item" @click="closeDocMenu(); commands.tableOp('delTable')">删除表格</button>
+        </template>
         <div v-if="editable" class="ov-ctx-sep"></div>
-        <button v-if="editable" class="ov-ctx-item" @click="docMenu = null; commands.addComment()">新建批注</button>
-        <button v-if="editable" class="ov-ctx-item" @click="docMenu = null; commands.insertLink()">插入链接</button>
+        <button v-if="editable" class="ov-ctx-item" @click="closeDocMenu(); commands.addComment()">新建批注</button>
+        <button v-if="editable" class="ov-ctx-item" @click="closeDocMenu(); commands.insertLink()">插入链接</button>
       </div>
     </div>
     <!-- 真查找替换栏：n/m 计数、↑↓ 跳转高亮、替换当前 / 全部、Esc 关闭 -->

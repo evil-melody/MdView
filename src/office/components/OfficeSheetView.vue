@@ -110,7 +110,7 @@ async function onDrawingOp(op: XlsxDrawingOp) {
 const emptyFeat = (): SheetFeatures => ({ charts: [], condFmt: [], validations: [], slicers: [], pivots: [], series: [] })
 const features = shallowRef<SheetFeatures>(emptyFeat())
 async function refreshFeatures() {
-  try { features.value = await props.client.call('xlsx.features', sheet.value) }
+  try { features.value = (await props.client.call('xlsx.features', sheet.value)) || emptyFeat() }
   catch { features.value = emptyFeat() }
 }
 const condDlg = ref(false)
@@ -1500,19 +1500,23 @@ function closeFindBar() {
   findBar.showReplace = false
 }
 
-/** 右键菜单：还原 Office 表格的上下文操作（增删行列、复制粘贴、清除内容）；行/列头有各自的菜单 */
-const sheetMenu = ref<{ x: number; y: number; r: number; c: number; mode: 'cell' | 'row' | 'col' } | null>(null)
+/** 右键菜单：还原 Office 表格的上下文操作（增删行列、复制粘贴、清除内容、合并）；行/列头有各自的菜单 */
+const sheetMenu = ref<{ x: number; y: number; r: number; c: number; mode: 'cell' | 'row' | 'col'; multi: boolean; merged: boolean } | null>(null)
 let sheetClip = ''
 function openSheetMenu(ev: MouseEvent, r: number, c: number, mode: 'cell' | 'row' | 'col' = 'cell') {
   ev.preventDefault()
   if (mode === 'row') selectRow(r)
   else if (mode === 'col') selectCol(c)
-  else select(r, c)
-  // 菜单约 340px 高：靠视口底部时上移，避免向下溢出被裁
+  else if (!inRange(r, c)) select(r, c)
+  // 右键落在已有选区内不塌选：多格选区是「合并单元格」的输入，清掉就没得合了
+  const g = rect(rangeSel.value ?? norm(sel.value, sel.value))
   sheetMenu.value = {
     x: Math.min(ev.clientX, window.innerWidth - 170),
-    y: Math.min(ev.clientY, Math.max(8, window.innerHeight - 360)),
-    r, c, mode
+    // 菜单约 340px 高（加合并区后约 420px）：靠视口底部时上移，避免向下溢出被裁
+    y: Math.min(ev.clientY, Math.max(8, window.innerHeight - 420)),
+    r, c, mode,
+    multi: g.r1 > g.r0 || g.c1 > g.c0,
+    merged: !!mergeOf(sel.value.r, sel.value.c),
   }
 }
 function closeSheetMenu() {
@@ -1901,6 +1905,9 @@ onBeforeUnmount(() => {
           <button class="ov-ctx-item" @click="copyCell">复制</button>
           <button class="ov-ctx-item" @click="pasteCell(); closeSheetMenu()">粘贴</button>
           <button class="ov-ctx-item" @click="commands.clearCells(); closeSheetMenu()">清除内容</button>
+          <div v-if="sheetMenu.multi || sheetMenu.merged" class="ov-ctx-sep"></div>
+          <button v-if="sheetMenu.multi" class="ov-ctx-item" @click="commands.merge('all'); closeSheetMenu()">合并单元格</button>
+          <button v-if="sheetMenu.merged" class="ov-ctx-item" @click="commands.merge('unmerge'); closeSheetMenu()">取消单元格合并</button>
           <button v-if="features.series.length" class="ov-ctx-item" @click="commands.seriesRefresh(); closeSheetMenu()">刷新序列</button>
         </template>
       </div>
