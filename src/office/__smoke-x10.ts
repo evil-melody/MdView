@@ -261,7 +261,7 @@ registerSmokeMode('x10', () => {
     const after = (await state.engine.call('xlsx.drawings', [0])).drawings[at]
     return { before: { w: before.w, h: before.h, host: before.host }, after: { w: after.w, h: after.h, host: after.host }, layout: !!res?.layout }
   }
-  /** 格内图换宿主格：move 到 (x,y) 后宿主格变为落点格，尺寸贴合该格现尺寸 */
+  /** 格内图换宿主格：move 到 (x,y) 后宿主格变为落点格，图片尺寸恒定且该格被撑到图片尺寸 */
   R.cellRehost = async (x: number, y: number) => {
     const list = (await state.engine.call('xlsx.drawings', [0])).drawings
     const at = list.findIndex((d: any) => d.cell)

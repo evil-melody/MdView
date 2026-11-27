@@ -1,0 +1,135 @@
+/* 「插入函数」向导（报障②）：外壳（遮罩/标题/底部按钮）复用 office-subtotal.css 的
+   .ov-dlg 家族，这里只承载向导独有的搜索框、函数列表、参数槽与预览区。
+   仅静态样式；动态定位一律 :style，不在此写内联模板 style。 */
+
+/* 非模态浮动面板：无遮罩，网格可继续操作（拾取参数）；标题栏可拖 */
+.ov-fd-float {
+  position: fixed;
+  z-index: 1200;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.28);
+}
+.ov-fd-float .ov-dlg-title { cursor: move; }
+
+.ov-fd { width: 460px; }
+.ov-fd .ov-dlg-body { display: flex; flex-direction: column; gap: 8px; }
+
+/* 搜索框 */
+.ov-fd-search {
+  flex: 1;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 5px;
+  background: var(--input-bg, #fff);
+  color: var(--text, #222);
+  font-size: 12px;
+  outline: none;
+}
+.ov-fd-search:focus { border-color: var(--accent, #5b6ee1); }
+
+/* 搜索态灰掉的类别下拉 */
+.ov-fd-off { opacity: 0.45; pointer-events: none; }
+
+/* 函数列表：定高滚动，选中态实心强调 */
+.ov-fd-list {
+  height: 168px;
+  overflow-y: auto;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  background: var(--panel, #fff);
+  padding: 2px;
+}
+.ov-fd-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text, #222);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ov-fd-item:hover { background: var(--panel-3, #f2f2f2); }
+.ov-fd-on { background: var(--accent-soft, #e6ebff); color: var(--accent-2, #3b49c0); font-weight: 600; }
+.ov-fd-empty { padding: 10px 8px; color: var(--muted, #888); font-size: 12px; text-align: center; }
+
+/* 说明区：签名 + 描述 */
+.ov-fd-desc {
+  min-height: 56px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  background: var(--panel-2, #fafafa);
+  color: var(--text-2, #555);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.ov-fd-sig { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--accent-2, #3b49c0); margin-bottom: 4px; }
+
+/* 参数步：函数名头 + 逐槽行 + 公式/预览 */
+.ov-fd-fnhead {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--panel-2, #f4f5ff);
+  color: var(--accent-2, #3b49c0);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.ov-fd-args { display: flex; flex-direction: column; gap: 6px; }
+.ov-fd-argrow { display: flex; align-items: center; gap: 8px; }
+.ov-fd-argname {
+  flex: 0 0 108px;
+  text-align: right;
+  color: var(--text-2, #555);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-fd-argin {
+  flex: 1;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 5px;
+  background: var(--input-bg, #fff);
+  color: var(--text, #222);
+  font-size: 12px;
+  outline: none;
+}
+.ov-fd-argin:focus { border-color: var(--accent, #5b6ee1); }
+.ov-fd-add {
+  align-self: flex-start;
+  padding: 3px 10px;
+  border: 1px dashed var(--border, #bbb);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-2, #555);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ov-fd-add:hover { border-color: var(--accent, #5b6ee1); color: var(--accent-2, #3b49c0); }
+
+.ov-fd-sect { display: flex; flex-direction: column; gap: 4px; }
+.ov-fd-formula {
+  padding: 6px 10px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  background: var(--panel, #fff);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--text, #222);
+  word-break: break-all;
+}
+.ov-fd-preview {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--panel-2, #fafafa);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text, #222);
+  min-height: 20px;
+}
+.ov-fd-err { color: #c00000; }

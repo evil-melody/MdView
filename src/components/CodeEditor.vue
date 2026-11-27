@@ -3,7 +3,7 @@ import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection } from '@codemirror/view'
 import { EditorState, Compartment } from '@codemirror/state'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
-import { bracketMatching, indentOnInput, indentUnit, syntaxHighlighting, HighlightStyle } from '@codemirror/language'
+import { bracketMatching, indentOnInput, indentUnit, syntaxHighlighting, HighlightStyle, codeFolding, foldGutter, foldKeymap } from '@codemirror/language'
 import { highlightSelectionMatches, searchKeymap } from '@codemirror/search'
 import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
 import { tags as t } from '@lezer/highlight'
@@ -62,6 +62,11 @@ const editorTheme = EditorView.theme(
     '.cm-cursor': { borderLeftColor: '#6ea8fe' },
     '&.cm-focused': { outline: 'none' },
     '.cm-gutters': { backgroundColor: '#16161b', color: '#5b5b66', border: 'none' },
+    '.cm-foldGutter .cm-gutterElement': { color: '#5b5b66', cursor: 'pointer' },
+    '.cm-foldPlaceholder': {
+      backgroundColor: '#22222a', border: '1px solid #3a3a45', color: '#8b8b96',
+      borderRadius: '3px', padding: '0 5px', margin: '0 3px', cursor: 'pointer',
+    },
     '.cm-activeLine': { backgroundColor: 'rgba(110,168,254,0.08)' },
     '.cm-activeLineGutter': { backgroundColor: 'rgba(110,168,254,0.12)', color: '#9aa4b2' },
     '.cm-selectionBackground, & .cm-content ::selection': { backgroundColor: 'rgba(110,168,254,0.25)' },
@@ -99,6 +104,9 @@ function children() {
     closeBrackets(),
     autocompletion(),
     indentUnit.of('    '),
+    // 代码折叠：JSON/JS/CSS/HTML 等语言包自带 foldNodeProp 折叠数据，这里只挂 UI 面
+    // （报障：大 JSON 无法折叠）。流式只读大文件跳过——折叠状态对超大文档是额外开销
+    ...(props.stream ? [] : [codeFolding(), foldGutter()]),
     syntaxHighlighting(highlightStyle),
     editorTheme,
     keymap.of([
@@ -107,6 +115,7 @@ function children() {
       ...searchKeymap,
       ...closeBracketsKeymap,
       ...completionKeymap,
+      ...foldKeymap,
       indentWithTab,
     ]),
     // 流式大文件跳过语法解析：Lezer 对几十 MB 文档全量解析会拖慢分片追加

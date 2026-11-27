@@ -7,6 +7,17 @@ export function cellCssAt(styles: CellCss[], cache: Map<number, CellOut[]>, r: n
   return hit?.[4] ? { ...css, color: hit[4] } : css
 }
 
+/** 活动格字号（pt）：从样式模型读（xf → css.fontSize 'NNpt'，内核 styles.ts 落点），
+ *  无样式回落工作表默认字体。供「增大/减小字号」步进——旧实现从 getComputedStyle
+ *  反推 px，受 zoom / 字体替换影响，读出的 pt 不是模型值。 */
+export function fontPtAt(styles: CellCss[], baseFont: CellCss, cache: Map<number, CellOut[]>, r: number, c: number): number {
+  const css = cellCssAt(styles, cache, r, c)
+  const m = /^([\d.]+)pt$/.exec(String(css.fontSize ?? ''))
+  if (m) return Number(m[1])
+  const b = /^([\d.]+)pt$/.exec(String(baseFont?.fontSize ?? ''))
+  return b ? Number(b[1]) : 11
+}
+
 export function mergedCss(styles: CellCss[], cache: Map<number, CellOut[]>, m: Merge): CellCss {
   const css = { ...cellCssAt(styles, cache, m.r0, m.c0) }
   const pick = (key: string, spots: [number, number][]) => {

@@ -77,9 +77,10 @@
 
 /* 文本层分级命中：非编辑态恒不接收指针，move 手势直接落到 ov-slide-el；编辑态才放开以选字 */
 .ov-slide-text-locked { pointer-events: none; }
-/* 形状文本就地编辑：仅编辑态挂载的 contenteditable，纯文本节点 + pre-wrap 保留换行 */
+/* 形状文本就地编辑：仅编辑态挂载的 contenteditable；内容由 bodyHtml(edit=true) 逐 run
+   镜像显示层（报障③）。布局沿用 .ov-slide-text 的 flex 列（垂直锚点与显示层一致），
+   容器 pre-wrap 只兜空占位体的裸文本直输；换行保真由 .ov-slide-para 承担 */
 .ov-slide-editable .ov-slide-text.ov-slide-text-edit {
-  display: block;
   pointer-events: auto;
   white-space: pre-wrap;
   overflow-wrap: break-word;

@@ -5,25 +5,30 @@ import { ref, shallowRef, reactive, computed, onMounted, onBeforeUnmount, watch,
 import type { DocumentClient, OpenResult, SheetProgress, BlockOut, CellDetail, CellCss, FmtPatch } from '../client'
 import type { CellOut, SheetOp, BookOp, XlsxDrawingInfo, XlsxDrawingOp, Merge, SheetFeatures, CondFmtRule, ValidationRule, SlicerAddOp, PivotFeature, Range as XRange } from '../core/xlsx/types'
 import { Axis } from '../view/xlsx/axis'
-import { chartDataOf, chartPng, type ChartKind } from '../view/xlsx/chartpng'
+import type { ChartKind } from '../view/xlsx/chartpng'
+import { insertChartFromRange } from '../view/xlsx/chartinsert'
+import { circularRef } from '../view/xlsx/circref'
 import { prepareImage } from '../view/xlsx/image'
 import { mediaDataUrl } from '../view/xlsx/media'
 import { isTextEntry, focusAnchor } from '../view/xlsx/focus'
 import { checkValidation } from '../view/xlsx/validate'
-import { cellCssAt, mergedCss } from '../view/xlsx/cellstyle'
+import { cellCssAt, mergedCss, fontPtAt } from '../view/xlsx/cellstyle'
 import { clamp, norm, parseAddr } from '../view/xlsx/addr'
 import { makeRibbonExtra } from '../view/xlsx/ribbon-extra'
-import {
-  AGGS, colName, computePivot, computeSubtotal, guessFields, inferFields, readMatrix,
-  sheetFields, type Matrix, type OutlineGroup, type SheetFieldInfo
-} from '../view/xlsx/analysis'
+import { colName, readMatrix, type Matrix } from '../view/xlsx/analysis'
+import { autoSumPlan } from '../view/xlsx/autosum'
+import { stepDecimalFmt } from '../view/xlsx/numfmtstep'
+import { useSheetAnalysis } from '../composables/useSheetAnalysis'
 import { officePrompt, officeAlert } from './officePrompt'
 import OfficeSubtotalDialog from './OfficeSubtotalDialog.vue'
 import OfficePivotDialog from './OfficePivotDialog.vue'
 import OfficeSeriesDialog from './OfficeSeriesDialog.vue'
 import OfficeSheetDrawingLayer from './OfficeSheetDrawingLayer.vue'
 import OfficeSheetFeatureLayer from './OfficeSheetFeatureLayer.vue'
+import OfficeSheetFindBar from './OfficeSheetFindBar.vue'
 import OfficeFeatureDialogs from './OfficeFeatureDialogs.vue'
+import OfficeFuncDialog from './OfficeFuncDialog.vue'
+import { useFuncWizard } from '../composables/useFuncWizard'
 
 type Rect = { r0: number; c0: number; r1: number; c1: number }
 const props = defineProps<{ client: DocumentClient; editable: boolean; info: OpenResult; transcodeImage?: (bytes: Uint8Array) => Promise<ArrayBuffer | null> }>()
@@ -32,6 +37,9 @@ const meta = props.info.xlsx!
 const sheets = shallowRef(meta.sheets.filter((s) => !s.hidden))
 const sheet = ref(sheets.value[0]?.index ?? 0)
 const progress = shallowRef<SheetProgress>({ sheet: 0, rows: 0, cols: 0, rowSizes: [], done: false })
+/** 数据区（used range）：progress 带来的初值 + selectAll 现拉 xlsx.stats 校正。
+ *  xlsx.set 不发 progress 事件，编辑后 progress 会滞后，选区判定不能只依赖它。 */
+const used = ref({ rows: 0, cols: 0 })
 const rowAxis = new Axis(24)
 const colAxis = new Axis(100)
 /** 行 → 该行已取回的单元格；编辑后整体失效 */
@@ -40,7 +48,16 @@ const version = ref(0)
 const scrollEl = ref<HTMLElement | null>(null)
 const pasteAnchor = ref<HTMLElement | null>(null)
 const atAnchor = () => isTextEntry(document.activeElement, pasteAnchor.value)
-const refocusAnchor = () => focusAnchor(pasteAnchor, props.editable)
+/** 向导开着时不回焦锚格：焦点留在对话框输入框（Office 非模态语义） */
+const refocusAnchor = () => {
+  if (funcWiz.st.open) return
+  focusAnchor(pasteAnchor, props.editable)
+}
+/** 点中图片/手柄后不回焦文本锚：否则图片层的 Delete/Backspace 守卫因焦点在 contenteditable 而吞键 */
+const onGridPointerUp = (e: PointerEvent) => {
+  if ((e.target as HTMLElement | null)?.closest?.('.ov-dlayer')) return
+  refocusAnchor()
+}
 const scrollTop = ref(0)
 const scrollLeft = ref(0)
 const viewportH = ref(700)
@@ -66,7 +83,7 @@ const loadToken = ref(0)
 const padRows = ref(120)
 const padCols = ref(24)
 /** 工具条可见状态：缩放 / 网格线 / 冻结 / 工作表列表 / 格式刷 */
-const bar = reactive({ zoom: 1, gridlines: true, frozen: false, painter: false, wrap: false, sheets: [] as { index: number; name: string }[], sheet: 0 })
+const bar = reactive({ zoom: 1, gridlines: true, frozen: false, painter: false, wrap: false, commentHidden: false, sheets: [] as { index: number; name: string }[], sheet: 0 })
 bar.sheets = sheets.value.map((s) => ({ index: s.index, name: s.name }))
 bar.sheet = sheet.value
 let painterXf = -1
@@ -112,6 +129,14 @@ const features = shallowRef<SheetFeatures>(emptyFeat())
 async function refreshFeatures() {
   try { features.value = (await props.client.call('xlsx.features', sheet.value)) || emptyFeat() }
   catch { features.value = emptyFeat() }
+}
+/** 批注角标（报障⑦显示层）：comments.list 全簿 → 过滤本表 → 特征层红三角；bar.commentHidden 控整层显隐 */
+const sheetComments = shallowRef<{ r: number; c: number; text: string }[]>([])
+async function refreshComments() {
+  const path = props.info.xlsx?.sheets.find((s) => s.index === sheet.value)?.path
+  const list = (await props.client.call('comments.list').catch(() => [])) as { text: string; at?: { sheet: string; r: number; c: number } }[]
+  sheetComments.value = (path ? (list ?? []).filter((x) => x.at && x.at.sheet === path) : [])
+    .map((x) => ({ r: x.at!.r, c: x.at!.c, text: x.text }))
 }
 const condDlg = ref(false)
 const valDlg = ref(false)
@@ -168,6 +193,9 @@ const HEAD = 26
 function applyProgress(p: SheetProgress) {
   if (p.sheet !== sheet.value) return
   progress.value = p
+  // 装载失败必须可见：内核把 loadSheet 的异常咽进 progress.error，静默的结果是
+  // 「网格正常但数据区全空」——用户无从判断是文件坏了还是程序坏了（报障根因）。
+  if (p.error) emit('error', `工作表载入失败：${p.error}`)
   // 缩放直接作用于轴尺寸：滚动位置与 Axis.index 用同一套坐标，不会错位
   if (p.defaultRowH) rowAxis.def = p.defaultRowH * bar.zoom
   if (p.defaultColW) colAxis.def = p.defaultColW * bar.zoom
@@ -175,6 +203,9 @@ function applyProgress(p: SheetProgress) {
   for (const c of p.colInfo ?? []) colAxis.setRange(c.min, c.max, (c.w || 0) * bar.zoom)
   rowAxis.count = Math.max(rowAxis.count, p.rows + padRows.value)
   colAxis.count = Math.max(colAxis.count, p.cols + padCols.value)
+  // 数据区随 progress 前进（loadSheet 逐页发出，rows/cols = maxRow+1/maxCol+1）；
+  // 编辑后的滞后由 selectAll 现拉 xlsx.stats 补齐
+  used.value = { rows: Math.max(used.value.rows, p.rows), cols: Math.max(used.value.cols, p.cols) }
   if (p.gridLines !== undefined) bar.gridlines = p.gridLines
   // 冻结行列数只在 progress 带 frozen 时更新（见 frozenRowsState 注释）
   if (p.frozen) {
@@ -267,10 +298,15 @@ const rangeLabel = computed(() => {
   const g = rangeSel.value
   if (!g) return `${colName(sel.value.c)}${sel.value.r + 1}`
   const a = rect(g)
+  // 整行/整列 = 点行头/列头的范围（到 padding 后的虚拟轴尾）；全选 = 数据区（usedRect）。
+  // 三者基准不同：混用会让点行头显示成「全选」、或 Ctrl+A 显示成行号区间。
+  const u = usedRect()
   const fullRow = a.c0 === 0 && a.c1 >= colAxis.count - 1
   const fullCol = a.r0 === 0 && a.r1 >= rowAxis.count - 1
+  const allUsed = u.c1 > 0 && u.r1 > 0 && a.r0 === 0 && a.c0 === 0 && a.r1 >= u.r1 && a.c1 >= u.c1
   if (fullCol && fullRow) return '全选'
   if (fullRow) return `${a.r0 + 1}:${a.r1 + 1}`
+  if (allUsed) return '全选'
   const p = `${colName(a.c0)}${a.r0 + 1}`
   const q = `${colName(a.c1)}${a.r1 + 1}`
   return p === q ? p : `${p}:${q}`
@@ -549,8 +585,18 @@ function selectCol(c: number, shift = false, add = false) {
   setSelection(g, { r: 0, c: shift ? anchor.value.c : c })
   multi.value = keep
 }
-function selectAll() {
-  setSelection({ r0: 0, c0: 0, r1: rowAxis.count - 1, c1: colAxis.count - 1 }, sel.value)
+/** 当前表数据区（used range）：内核 stats 的 rows/cols 即 maxRow+1/maxCol+1，空表保底 1×1。
+ *  Excel 的 Ctrl+A 选数据区，不是含延伸空行/列的虚拟网格（报障：全选整张无限网格全绿）。 */
+function usedRect(): Rect {
+  return { r0: 0, c0: 0, r1: Math.max(1, used.value.rows) - 1, c1: Math.max(1, used.value.cols) - 1 }
+}
+async function selectAll() {
+  // xlsx.set 不发 progress 事件：全选前现拉 stats，used range 以内核当下状态为准
+  try {
+    const st = (await props.client.call('xlsx.stats', sheet.value)) as { rows: number; cols: number }
+    used.value = { rows: st.rows, cols: st.cols }
+  } catch { /* 拉取失败沿用 progress 初值 */ }
+  setSelection(usedRect(), sel.value)
 }
 
 /** 鼠标拖选 / 填充柄 / 拖动选区内容：坐标与虚拟网格同一套 Axis，冻结区补 scroll 偏移 */
@@ -675,6 +721,18 @@ function onGridMove(ev: PointerEvent) {
   autoScroll(ev)
 }
 function onGridUp() {
+  // 报障② Office 非模态拾取：向导参数步时网格拖选/单击 = 把区域回填参数槽，
+  // 不触发填充/搬移/列宽写回（Excel 对话框打开时网格只用于选引用）
+  if (funcWiz.st.open && funcWiz.st.step === 'args') {
+    resizeState = null
+    const g = dragRect.value ?? rect(rangeSel.value ?? norm(sel.value, sel.value))
+    funcWiz.fillRange(g.r0, g.c0, g.r1, g.c1)
+    dragMode.value = ''
+    dragRect.value = null
+    dragBase = null
+    dragStart = null
+    return
+  }
   if (resizeState) {
     const s = resizeState
     resizeState = null
@@ -723,7 +781,7 @@ async function clearRange() {
     if (ins.length > 10000) break
   }
   if (ins.length > 10000) return void officeAlert('清除内容', '选区过大，请缩小选区后重试')
-  await commands.setCells(ins)
+  await commands.setCells(ins, { skipValidation: true })
 }
 
 function beginEdit(initial?: string) {
@@ -815,6 +873,8 @@ async function switchSheet(index: number) {
   blockCache.clear()
   rowAxis.count = 0
   colAxis.count = 0
+  // 数据区清零：新表的 progress / selectAll stats 重新填充，不沿用旧表的 used range
+  used.value = { rows: 0, cols: 0 }
   merges.value = []
   // 换表：冻结状态重置，新表若带冻结由它的 progress 事件带回来
   frozenRowsState.value = 0
@@ -824,6 +884,7 @@ async function switchSheet(index: number) {
   await props.client.call('xlsx.load', index)
   void refreshDrawings()
   void refreshFeatures()
+  void refreshComments()
   void loadVisible()
 }
 
@@ -851,77 +912,53 @@ const fmtFlags = { b: false, i: false, u: false, strike: false }
 const readAll = () => readMatrix(props.client, sheet.value, progress.value.rows)
 const noData = (name: string) => void officeAlert(name, '当前工作表没有可用数据，请先打开含数据的表格或选中数据区域')
 
-/** 分类汇总大纲：前端 hideRows 模拟，非真 xlsx 大纲（需内核 group RPC 才能落盘）。
- *  groups 存每组明细行区间 + 小计行（最终行号）；点击 +/- 或级别按钮折叠/展开明细行（小计行保持可见）。 */
-const outline = reactive({ active: false, groups: [] as OutlineGroup[], total: -1, level: 2 })
-async function fmtRangeCells(r0c: number, c0c: number, r1c: number, c1c: number, patch: Record<string, unknown>) {
-  await props.client.call('xlsx.format', sheet.value, { r0: r0c, c0: c0c, r1: r1c, c1: c1c }, patch)
-  blockCache.clear()
-  void loadVisible()
-}
-async function applyOutline() {
-  for (const grp of outline.groups) {
-    if (!grp.detail.length) continue
-    await sheetOp({ op: 'hideRows', a: grp.detail[0], b: grp.detail[grp.detail.length - 1], hidden: grp.collapsed })
-  }
-}
-function toggleGroup(i: number) {
-  const grp = outline.groups[i]
-  if (!grp) return
-  grp.collapsed = !grp.collapsed
-  void applyOutline()
-}
-function setLevel(L: number) {
-  outline.level = L
-  for (const grp of outline.groups) grp.collapsed = grp.level >= L
-  void applyOutline()
-}
+/** 数据分析簇（分类汇总/透视/大纲）：对话框状态与 RPC 编排在 composables/useSheetAnalysis */
+const analysis = useSheetAnalysis({
+  readAll,
+  sheetOp: (op) => sheetOp(op),
+  setCells: async (cells) => { await commands.setCells(cells) },
+  format: async (g, patch) => {
+    await props.client.call('xlsx.format', sheet.value, g, patch)
+  },
+  refresh: () => { blockCache.clear(); void loadVisible() },
+  reveal,
+  noData,
+  range
+})
+const { outline, setLevel, toggleGroup, group, ungroup, subtotalDlg, openSubtotal, onSubtotalConfirm, pivotDlg, openPivot, onPivotConfirm } = analysis
 
-/** 分类汇总对话框：打开时快照矩阵，确认后按用户选择写回 */
-let subCtx: Matrix | null = null
-const subtotalDlg = shallowRef<{ fields: SheetFieldInfo[]; initial: { groupCol: number; agg: string; valueCols: number[] } } | null>(null)
-async function onSubtotalConfirm(p: { groupCol: number; agg: string; valueCols: number[]; below: boolean }) {
-  const d = subCtx
-  subCtx = null
-  subtotalDlg.value = null
-  if (d) await runSubtotal(d, p.groupCol, AGGS[p.agg] ?? 'sum', p.valueCols, p.below)
-}
-/** 分类汇总写回编排：计算在 view/xlsx/analysis.computeSubtotal，这里只做 RPC（插行/写值/加粗/大纲） */
-async function runSubtotal(d: Matrix, gcol: number, how: string, vcs: number[], below: boolean) {
-  if (!vcs.length) return void officeAlert('分类汇总', '请至少选择一个汇总项')
-  const g = rangeSel.value ? rect(rangeSel.value) : { r0: 0, c0: 0, r1: d.lastR, c1: d.lastC }
-  const plan = computeSubtotal(d, g, gcol, how, vcs, below)
-  if (!plan.ok) return void officeAlert('分类汇总', '没有可汇总的数据行')
-  for (const job of plan.jobs) {
-    await sheetOp({ op: 'insertRows', at: job.at, n: 1 })
-    await commands.setCells(job.cells.map((x) => ({ ...x, r: job.at })))
-    await fmtRangeCells(job.at, plan.left, job.at, plan.right, { b: true })
+/** 「插入函数」向导（报障②）：状态机在 useFuncWizard，readCell 走 xlsx.cell 生产同路 */
+const funcWiz = useFuncWizard({
+  sheetName: () => sheets.value.find((s) => s.index === sheet.value)?.name ?? 'Sheet1',
+  date1904: meta.date1904,
+  readCell: async (r, c) => {
+    const d = (await props.client.call('xlsx.cell', sheet.value, r, c)) as { value?: unknown } | undefined
+    return d?.value == null ? '' : String(d.value)
   }
-  outline.groups = plan.outline
-  outline.total = plan.total
-  outline.active = true
-  outline.level = 2
-  reveal(plan.top, gcol)
+})
+/** 最近插入的函数名（Excel「最近使用」；localStorage 持久，ribbon-extra 同键） */
+const RECENT_FN_KEY = 'mdview.xlsx.recentFunctions'
+function pushRecentFn(name: string) {
+  try {
+    const raw = localStorage.getItem(RECENT_FN_KEY)
+    const list: string[] = raw ? (JSON.parse(raw) as string[]) : []
+    localStorage.setItem(RECENT_FN_KEY, JSON.stringify([name, ...list.filter((n) => n !== name)].slice(0, 10)))
+  } catch { /* 隐私模式等写入失败不影响插入 */ }
 }
-
-/** 数据透视表对话框：打开时快照矩阵（guessFields 提供默认摆放） */
-let pivotCtx: Matrix | null = null
-const pivotDlg = shallowRef<{ fields: SheetFieldInfo[]; initial: { rows: number[]; cols: number[]; values: { c: number; agg: string }[] } } | null>(null)
-async function onPivotConfirm(p: { rows: number[]; cols: number[]; values: { c: number; agg: string }[] }) {
-  const d = pivotCtx
-  pivotCtx = null
-  pivotDlg.value = null
-  if (d) await runPivot(d, p.rows, p.cols, p.values.map((v) => ({ c: v.c, agg: AGGS[v.agg] ?? 'sum' })))
-}
-/** 透视写回编排：计算在 view/xlsx/analysis.computePivot（交叉表 + 总计），这里只写回 */
-async function runPivot(d: Matrix, rowFs: number[], colFs: number[], valFs: { c: number; agg: string }[]) {
-  const plan = computePivot(d, rowFs, colFs, valFs)
-  if (!plan.ok) {
-    if (plan.reason === 'valueField') return void officeAlert('数据透视表', '请至少放置一个值字段')
-    return void officeAlert('数据透视表', '指定的字段没有数据，请把选区放在数据区域内或改字段名')
+async function onFuncInsert(formula: string) {
+  const m = /^=([A-Za-z0-9.]+)/.exec(formula)
+  if (m) pushRecentFn(m[1].toUpperCase())
+  const t = { ...funcWiz.st.target } // 目标格 = 开向导瞬间的光标（拾取拖选不改变落点）
+  // Excel 语义（报障 P18-C）：公式引用覆盖目标格 = 循环引用 → 警告且不写入、向导不关，
+  // 旧实现直接落格让内核求出 #REF! 静默占格。区域引用判包含（=SUM(I1:I20) 写 I12 同样拦）。
+  const circ = circularRef(formula, sheets.value.find((s) => s.index === sheet.value)?.name ?? 'Sheet1', t)
+  if (circ) {
+    await officeAlert('循环引用', `公式引用了它自己要写入的单元格（${colName(t.c)}${t.r + 1} ← ${circ}），Excel 不允许这样写入。请修改参数里的引用后重试。`)
+    return
   }
-  await commands.setCells(plan.cells)
-  reveal(0, plan.start)
+  funcWiz.close()
+  await commitEditWith(formula, t.r, t.c)
+  setSelection(norm({ r: t.r, c: t.c }, { r: t.r, c: t.c }), { r: t.r, c: t.c })
 }
 
 /** 插入图片：粘贴走「置于单元格」（自然尺寸锚选区左上格，内核撑大宿主格）；菜单插入保留浮图自然尺寸 */
@@ -951,26 +988,16 @@ function pickImage() {
   inp.click()
 }
 
-/** 插入图表：选区数据 → 真实 c:chartSpace part（可刷新）；原生路径失败时降级为 PNG 图片 */
+/** 插入图表：选区（单格自动扩连续数据区）→ 真实 c:chartSpace part（可刷新）；
+ *  原生路径失败降级 PNG 且弹提示告知（chartinsert.ts），不再静默。 */
 async function insertChart(kind: ChartKind) {
-  const g = range()
-  if (g.r1 === g.r0 && g.c1 === g.c0) return officeAlert('插入图表', '请先选择要绘图的数据区域（含表头更佳）')
-  const block: BlockOut = await props.client.call('xlsx.block', sheet.value, g.r0, g.r1 + 1)
-  const matrix: string[][] = Array.from({ length: g.r1 - g.r0 + 1 }, () => [])
-  for (const row of block.rows) {
-    if (row.r < g.r0 || row.r > g.r1) continue
-    for (const v of row.cells) if (v[0] >= g.c0 && v[0] <= g.c1) matrix[row.r - g.r0][v[0] - g.c0] = String(v[1] ?? '')
-  }
-  const data = chartDataOf(matrix)
-  if (!data) return officeAlert('插入图表', '所选区域没有可绘图的数据（需要至少两行数值）')
-  const anchor = { row: g.r1 + 1, col: g.c0, wPx: 480, hPx: 300 }
-  try {
-    await props.client.call('xlsx.chartAdd', sheet.value, { kind, title: '图表', source: { r0: g.r0, c0: g.c0, r1: g.r1, c1: g.c1 }, data, anchor })
-  } catch {
-    // 降级：旧 PNG 路径仍写真实 drawing（图片级 1:1）
-    const { bytes } = await chartPng(kind, data)
-    await props.client.call('xlsx.image', sheet.value, { bytes, ext: 'png', anchor })
-  }
+  const okIns = await insertChartFromRange(kind, range(), {
+    block: (r0, r1) => props.client.call('xlsx.block', sheet.value, r0, r1),
+    readAll,
+    add: (op) => props.client.call('xlsx.chartAdd', sheet.value, op),
+    image: (bytes, anchor) => props.client.call('xlsx.image', sheet.value, { bytes, ext: 'png', anchor }),
+  })
+  if (!okIns) return
   emit('change')
   await refreshFeatures()
   await refreshDrawings()
@@ -979,7 +1006,7 @@ async function insertChart(kind: ChartKind) {
 /** 粘贴：一律走原生 paste 事件的 clipboardData（含图片/文本），不用 navigator.clipboard.read()——后者在 WKWebView 弹系统 Paste 授权浮层，多一层点击 */
 const onDocPaste = (e: ClipboardEvent) => {
   if (!scrollEl.value || scrollEl.value.offsetParent === null) return
-  if (subtotalDlg.value || pivotDlg.value) return
+  if (subtotalDlg.value || pivotDlg.value || funcWiz.st.open) return
   if (atAnchor()) return
   const dt = e.clipboardData
   const item = [...(dt?.items ?? [])].find((i) => i.kind === 'file' && i.type.startsWith('image/'))
@@ -1000,6 +1027,8 @@ const commands = {
   sheets: () => sheets.value,
   currentSheet: () => sheet.value,
   selection: () => sel.value,
+  /** 范围选区（整行/整列/全选）：探针锁 used range 用，非命令 */
+  rangeSel: () => rangeSel.value,
   formula: () => formula.value,
   setFormula: (v: string) => (formula.value = v),
   commitFormula,
@@ -1045,15 +1074,21 @@ const commands = {
     }
   },
   insertImage: () => pickImage(),
-  insertChart: (kind: string) => void insertChart(kind as ChartKind).catch((e) => emit('error', String(e))),
+  insertChart: (kind: string) => insertChart(kind as ChartKind).catch((e) => emit('error', String(e))),
   toggleWrap: () => {
     bar.wrap = !bar.wrap
     void commands.format({ wrap: bar.wrap })
   },
   merge: (mode: string) => sheetOp(mode === 'unmerge' ? { op: 'unmerge', range: range() } : { op: 'merge', range: range(), mode }),
-  /* ponytail: 增减小数位用固定格式覆盖，未读回当前单元格的 numFmt 做增量推导。
-     上限：自定义格式会被重置；升级：从 xlsx.cell 取 format 后按 0 的位数重算。 */
-  decimals: (d: number) => commands.format({ numFmt: d > 0 ? '0.00' : '0.0' }),
+  /** 增加/减少小数位数（Excel 增量语义）：从活动格当前 numFmt 按 0 的位数步进，
+   *  千分位/百分号/货币等非数值段保留；读不到才回落默认起点（numfmtstep.ts）。 */
+  decimals: (d: number) => {
+    const hit = (blockCache.get(sel.value.r) ?? []).find((x) => x[0] === sel.value.c)
+    const cur = meta.formats[hit?.[2] ?? 0]
+    const next = stepDecimalFmt(cur, d)
+    if (next === null) return
+    void commands.format({ numFmt: next })
+  },
   customNumFmt: async () => {
     const v = await officePrompt('自定义数字格式', '0.00%', '例如 0.00%')
     if (v) void commands.format({ numFmt: v })
@@ -1099,10 +1134,36 @@ const commands = {
     })
   },
   clearCells: () => clearRange(),
-  insertFunc: (fn: string) => {
-    formula.value = `=${fn}(`
-    const el = document.querySelector<HTMLInputElement>('.ov-formula-input')
-    el?.focus()
+  /** 排序和筛选›清除（Excel 语义）：只清筛选条件、恢复隐藏行，绝不删单元格数据。
+   *  x6 探针锁「清除」标签与 cmd 未接入门；原 clearCells 会写空串，属误删数据缺陷。 */
+  clearFilter: async () => {
+    filterUI.value = null
+    filters.clear()
+    return recompute()
+  },
+  /** 自动求和（Office 语义）：推断结果格并写入完整公式；孤立空格才落 =FN() 编辑态；
+   *  紧邻格被占满找不到空结果格时提示跳过，绝不覆盖原数据（报障⑨）。 */
+  insertFunc: async (fn: string) => {
+    pushRecentFn(fn)
+    const d = await readAll()
+    const plan = autoSumPlan(d.m, range(), fn)
+    if (plan.caret) {
+      formula.value = plan.caret
+      document.querySelector<HTMLInputElement>('.ov-formula-input')?.focus()
+      return
+    }
+    for (const x of plan.cells) await commitEditWith(x.input, x.r, x.c)
+    const first = plan.cells[0]
+    if (first) setSelection(norm({ r: first.r, c: first.c }, { r: first.r, c: first.c }), { r: first.r, c: first.c })
+    if (plan.warn) await officeAlert('自动求和', plan.warn)
+  },
+  /** 「插入函数」向导：ribbon 十个分类按钮汇聚点（报障②），cat 预选类别，目标格锁定当前光标 */
+  openFuncDlg: (cat?: string) => funcWiz.open(cat, undefined, { ...sel.value }),
+  /** 最近使用的函数：Excel 点选后直达参数步（非半截公式续写） */
+  openFuncByName: (fn: string) => {
+    pushRecentFn(fn)
+    funcWiz.open(undefined, fn, { ...sel.value })
+    funcWiz.goArgs()
   },
   focusFormula: () => document.querySelector<HTMLInputElement>('.ov-formula-input')?.focus(),
   recalc: async () => {
@@ -1111,37 +1172,13 @@ const commands = {
     void loadVisible()
   },
   find: (q?: string) => {
-    openFindBar(q ?? '')
+    findBarRef.value?.openFindBar(q ?? '')
     return Promise.resolve([])
   },
-  findNext: async () => {
-    if (!findHits.value.length) return
-    findIdx.value = (findIdx.value + 1) % findHits.value.length
-    const hit = findHits.value[findIdx.value]
-    select(hit.r, hit.c)
-    reveal(hit.r, hit.c)
-  },
-  findPrev: async () => {
-    if (!findHits.value.length) return
-    findIdx.value = (findIdx.value - 1 + findHits.value.length) % findHits.value.length
-    const hit = findHits.value[findIdx.value]
-    select(hit.r, hit.c)
-    reveal(hit.r, hit.c)
-  },
-  replace: () => {
-    openFindBar('')
-    findBar.showReplace = true
-  },
-  replaceAll: async () => {
-    const q = findBar.find
-    const by = findBar.replace
-    if (!q) return
-    await props.client.call('xlsx.replace', sheet.value, q, by)
-    blockCache.clear()
-    emit('change')
-    void loadVisible()
-    void runFind()
-  },
+  findNext: async () => { findBarRef.value?.findNext() },
+  findPrev: async () => { findBarRef.value?.findPrev() },
+  replace: () => { findBarRef.value?.openReplaceBar() },
+  replaceAll: async () => { findBarRef.value?.replaceAll() },
   bookOp: async (k: string) => {
     const ops: Record<string, Record<string, unknown>> = {
       add: { op: 'add' },
@@ -1166,9 +1203,12 @@ const commands = {
     applyProgress(progress.value)
     void loadVisible()
   },
-  setCells: async (cellsIn: { r: number; c: number; input: string }[]) => {
-    // 单格用户输入：命中数据验证规则且非法时给出出错警告（批量操作不拦）
-    if (cellsIn.length === 1) {
+  setCells: async (cellsIn: { r: number; c: number; input: string }[], opts?: { skipValidation?: boolean }) => {
+    // 单格用户输入：命中数据验证规则且非法时给出出错警告（批量操作不拦）。
+    // skipValidation：清除内容路径（Delete/Backspace/右键清除）——Excel 语义下清除永不被
+    // 验证拦，哪怕规则 allowBlank=false；编辑提交空串仍走验证门（Excel 忽略空值未勾选时报错）。
+    // 报障①根因：退格清空走本门时被 allowBlank=false 规则拦下弹「数据验证」，内容删不掉。
+    if (!opts?.skipValidation && cellsIn.length === 1) {
       const ci = cellsIn[0]
       const res = checkValidation(features.value.validations, ci.r, ci.c, ci.input)
       if (!res.ok) return officeAlert('数据验证', res.message ?? '输入无效')
@@ -1178,31 +1218,12 @@ const commands = {
     emit('change')
     void loadVisible()
   },
-  /** 分类汇总（Office 式对话框）：字段推断后弹出面板，用户选定分组列/方式/汇总项/方向 */
-  subtotal: async () => {
-    const d = await readAll()
-    if (d.lastR < 1 || d.lastC < 0) return noData('分类汇总')
-    const g = rangeSel.value ? rect(rangeSel.value) : { r0: 0, c0: 0, r1: d.lastR, c1: d.lastC }
-    const { gc, vcs } = inferFields(d, g)
-    if (!vcs.length) return void officeAlert('分类汇总', '未找到数值列，请选中含数据的区域或改列')
-    subCtx = d
-    subtotalDlg.value = { fields: sheetFields(d), initial: { groupCol: gc, agg: '求和', valueCols: vcs } }
-  },
-  /** 数据透视表（Office 式字段面板）：默认按 guessFields 预填，用户调整行/列/值后生成交叉表 */
-  pivotTable: async () => {
-    const d = await readAll()
-    if (d.lastR < 1 || d.lastC < 0) return noData('数据透视表')
-    const f = guessFields(d, range())
-    pivotCtx = d
-    pivotDlg.value = {
-      fields: sheetFields(d),
-      initial: {
-        rows: [f.gc],
-        cols: [f.gc + 1 <= d.lastC ? f.gc + 1 : Math.max(0, f.gc - 1)],
-        values: [{ c: f.vc, agg: '求和' }]
-      }
-    }
-  },
+  /** 分类汇总（Office 式对话框）：字段推断/写回编排在 useSheetAnalysis（报障③恒用全表区） */
+  subtotal: () => openSubtotal(),
+  /** 数据透视表（Office 式字段面板）：默认摆放猜测在 useSheetAnalysis */
+  pivotTable: () => openPivot(),
+  /** 大纲级别（分类汇总折叠层次）：直接委托分析簇的 setLevel */
+  outlineLevel: (level: number) => { analysis.setLevel(level) },
     /** 自动筛选：打开表头下拉筛选面板（Office 式），不再用 prompt 文本 */
   autoFilter: async () => {
     openFilter(sel.value.c)
@@ -1246,7 +1267,12 @@ Object.assign(commands, makeRibbonExtra({
   fmt: (p: FmtPatch) => commands.format(p), merge: (m: string) => commands.merge(m),
   freeze: (k: string) => commands.freeze(k), setZoom: (z: number) => commands.setZoom(z), recalc: () => commands.recalc(),
   reload: () => { blockCache.clear(); void loadVisible() }, changed: () => emit('change'),
-  allSheets: () => props.info.xlsx?.sheets ?? [], readAll: () => readAll()
+  allSheets: () => props.info.xlsx?.sheets ?? [], readAll: () => readAll(),
+  openFunc: (fn?: string) => fn ? commands.openFuncByName(fn) : funcWiz.open(undefined, undefined, { ...sel.value }),
+  cellFontPt: () => fontPtAt(meta.styles, meta.baseFont, blockCache, sel.value.r, sel.value.c),
+  group: (g: { r0: number; c0: number; r1: number; c1: number }) => group(g),
+  ungroup: (g: { r0: number; c0: number; r1: number; c1: number }) => ungroup(g),
+  refreshComments: () => { void refreshComments() }
 }))
 
 /** 条件格式对话框确定：整组规则写回内核（replace-all） */
@@ -1469,36 +1495,11 @@ async function recompute() {
     i = j + 1
   }
 }
-defineExpose({ commands, bar })
+defineExpose({ commands, bar, refreshFeatures })
 
-/** 查找替换条：Tauri WebView 无 window.prompt，全部走内联 UI */
-const findBar = reactive({ open: false, showReplace: false, find: '', replace: '', busy: false })
-const findHits = ref<{ r: number; c: number; text: string }[]>([])
-const findIdx = ref(-1)
-function openFindBar(q: string) {
-  findBar.open = true
-  if (q) findBar.find = q
-}
-async function runFind() {
-  const s = findBar.find
-  if (!s) { findHits.value = []; findIdx.value = -1; return }
-  try {
-    const hits = await props.client.call('xlsx.find', sheet.value, s)
-    findHits.value = hits ?? []
-    findIdx.value = findHits.value.length ? 0 : -1
-    if (findHits.value.length) {
-      const hit = findHits.value[0]
-      select(hit.r, hit.c)
-      reveal(hit.r, hit.c)
-    }
-  } catch (e) {
-    emit('error', String(e))
-  }
-}
-function closeFindBar() {
-  findBar.open = false
-  findBar.showReplace = false
-}
+/** 查找替换条：状态机在内联子组件（OfficeSheetFindBar，2000 行上限抽离件），
+ *  命中跳转经 @goto 回本视图 select+reveal，替换完成经 @changed 刷缓存重载 */
+const findBarRef = ref<InstanceType<typeof OfficeSheetFindBar> | null>(null)
 
 /** 右键菜单：还原 Office 表格的上下文操作（增删行列、复制粘贴、清除内容、合并）；行/列头有各自的菜单 */
 const sheetMenu = ref<{ x: number; y: number; r: number; c: number; mode: 'cell' | 'row' | 'col'; multi: boolean; merged: boolean } | null>(null)
@@ -1584,7 +1585,7 @@ function onSheetKey(e: KeyboardEvent) {
   }
   if (atAnchor()) return
   // 筛选面板 / 对话框打开时不做表格导航（焦点常落在普通 button 上）
-  if (filterUI.value || subtotalDlg.value || pivotDlg.value) return
+  if (filterUI.value || subtotalDlg.value || pivotDlg.value || funcWiz.st.open) return
   if (mod) {
     const k = e.key.toLowerCase()
     if (k === 'z' && !e.shiftKey) { e.preventDefault(); void commands.undo() }
@@ -1661,7 +1662,7 @@ onMounted(() => {
   // IME 组合结束：组合期间的按键被 onSheetKey 放过（不抢），组合结果在此补进编辑态
   const onCompositionEnd = (e: CompositionEvent) => {
     if (editing.value || !e.data) return
-    if (findBar.open || nameFocus.value) return
+    if (findBarRef.value?.findBar.open || nameFocus.value) return
     beginEdit(e.data)
   }
   window.addEventListener('compositionend', onCompositionEnd)
@@ -1708,7 +1709,7 @@ onBeforeUnmount(() => {
       />
     </div>
     <div ref="scrollEl" class="ov-grid-scroll" @scroll.passive="onScroll">
-      <div class="ov-grid" :style="{ width: ROW_HEAD + colAxis.total() + 'px', height: HEAD + rowAxis.total() + 'px', ...(meta.baseFont ?? {}) }" @pointerdown="onGridDown" @pointerup="refocusAnchor">
+      <div class="ov-grid" :style="{ width: ROW_HEAD + colAxis.total() + 'px', height: HEAD + rowAxis.total() + 'px', ...(meta.baseFont ?? {}) }" @pointerdown="onGridDown" @pointerup="onGridPointerUp">
         <div class="ov-corner" title="全选" :style="{ left: scrollLeft + 'px' }" @pointerdown.stop="selectAll()" @click.stop="selectAll()"></div>
         <div
           v-if="outline.active"
@@ -1798,6 +1799,8 @@ onBeforeUnmount(() => {
           :zoom="bar.zoom"
           :editable="editable"
           :sel="sel"
+          :comments="sheetComments"
+          :comment-hidden="!!bar.commentHidden"
           @validation-select="onFeatureValidationSelect"
           @slicer-toggle="onFeatureSlicerToggle"
           @chart-refresh="onFeatureChartRefresh"
@@ -1846,25 +1849,15 @@ onBeforeUnmount(() => {
         <div v-if="frozenCols" class="ov-freeze-v" :style="{ left: ROW_HEAD + frozenW + scrollLeft + 'px', top: scrollTop + 'px' }"></div>
       </div>
     </div>
-    <!-- 查找替换条 -->
-    <div v-if="findBar.open" class="ov-findbar">
-      <input
-        v-model="findBar.find"
-        class="ov-find-input"
-        placeholder="查找内容，回车查找"
-        @keydown.enter.prevent="runFind"
-        @input="findHits = []; findIdx = -1"
-      />
-      <span class="ov-find-count">{{ findHits.length ? `${findIdx + 1} / ${findHits.length}` : (findBar.find ? '无匹配' : '') }}</span>
-      <button class="ov-find-btn" title="上一个" @click="commands.findPrev()">↑</button>
-      <button class="ov-find-btn" title="下一个" @click="commands.findNext()">↓</button>
-      <button class="ov-find-btn" :class="{ 'ov-find-on': findBar.showReplace }" title="替换" @click="findBar.showReplace = !findBar.showReplace">替换</button>
-      <button class="ov-find-btn" title="关闭" @click="closeFindBar">✕</button>
-      <template v-if="findBar.showReplace">
-        <input v-model="findBar.replace" class="ov-find-input" placeholder="替换为" @keydown.enter.prevent="commands.replaceAll()" />
-        <button class="ov-find-btn" @click="commands.replaceAll()">全部替换</button>
-      </template>
-    </div>
+    <!-- 查找替换条（状态机在子组件，命中跳转/替换刷新经事件回本视图） -->
+    <OfficeSheetFindBar
+      ref="findBarRef"
+      :client="props.client"
+      :sheet="() => sheet"
+      @goto="(hit) => { select(hit.r, hit.c); reveal(hit.r, hit.c) }"
+      @changed="() => { blockCache.clear(); emit('change'); void loadVisible() }"
+      @error="(m) => emit('error', m)"
+    />
     <div class="ov-sheet-tabs">
       <button class="ov-add-row" title="在表格末尾添加一行" @click="addRowAtEnd">＋ 行</button>
       <button
@@ -1980,6 +1973,7 @@ onBeforeUnmount(() => {
         @confirm="onPivotConfirm"
         @cancel="pivotDlg = null"
       />
+      <OfficeFuncDialog :wiz="funcWiz" @insert="onFuncInsert" @cancel="funcWiz.close()" />
       <OfficeSeriesDialog
         :open="seriesDlg"
         :sel-range="dlgRange"

@@ -554,27 +554,34 @@ export interface FontEngine {
 
 let enginePromise: Promise<FontEngine> | null = null
 
-/** glue 依赖的最小垫片面 */
+/** 执行宿主：主线程是 window，Worker 是 self（Worker 全局没有 window/document） */
+function host(): any {
+  return typeof window !== 'undefined' ? window : (self as any)
+}
+
+/**
+ * public/ 资源的绝对 URL。Worker 里相对 fetch 一律不可用（解析基准是 worker 自己的
+ * scriptURL，data:/blob: 下直接抛 Failed to parse URL），故主线程与 Worker 统一走绝对 URL。
+ */
+export function fontAssetUrl(path: string): string {
+  const h = host()
+  const base = typeof document !== 'undefined' && document.baseURI ? document.baseURI : h.location.href
+  return new URL(path, base).href
+}
+
+/**
+ * glue 依赖的最小垫片面。fonts.js 实测：loadScript / AscBrowser / isLeadingSurrogateChar /
+ * retinaPixelRatio 全 0 引用（旧版这几段是死代码，已删）；真依赖只有 String.prototype.toUtf8
+ * （HB_ShapeText 内部，8 处）与 window.AscFonts.onLoadModule 握手位。
+ */
 function installShims(): void {
-  const w = window as any
-  w.AscFonts = w.AscFonts || {}
-  w.AscFonts.onLoadModule = w.AscFonts.onLoadModule || (() => { /* loadEngine 覆写 */ })
-  w.AscCommon = w.AscCommon || {}
-  if (!w.AscCommon.loadScript) {
-    w.AscCommon.loadScript = (url: string, onSuccess: () => void, onError: () => void) => {
-      const s = document.createElement('script')
-      s.type = 'text/javascript'
-      s.src = url
-      s.onload = onSuccess
-      s.onerror = onError
-      document.head.appendChild(s)
-    }
-  }
-  w.AscCommon.AscBrowser = w.AscCommon.AscBrowser || { isAndroidNativeApp: false, isIE: false, isArm: true, retinaPixelRatio: 1, isMobile: false }
-  w.AscCommon.isLeadingSurrogateChar = (c: number) => c >= 0xd800 && c <= 0xdfff
+  const h = host()
+  h.AscFonts = h.AscFonts || {}
+  h.AscFonts.onLoadModule = h.AscFonts.onLoadModule || (() => { /* loadEngine 覆写 */ })
+  h.AscCommon = h.AscCommon || {}
   // 语言串编码走 String.prototype.toUtf8（glue HB_ShapeText 内部）；glue 自带 polyfill 时不覆盖
-  if (typeof (w.String.prototype as any).toUtf8 !== 'function') {
-    ;(w.String.prototype as any).toUtf8 = function (noEnd?: boolean): Uint8Array {
+  if (typeof (String.prototype as any).toUtf8 !== 'function') {
+    ;(String.prototype as any).toUtf8 = function (noEnd?: boolean): Uint8Array {
       const s = this as unknown as string
       const out: number[] = []
       for (let i = 0; i < s.length; i++) {
@@ -608,14 +615,14 @@ export function loadEngine(): Promise<FontEngine> {
   if (enginePromise) return enginePromise
   enginePromise = new Promise<FontEngine>((resolve, reject) => {
     installShims()
-    const w = window as any
-    const prev = w.AscFonts.onLoadModule
+    const h = host()
+    const prev = h.AscFonts.onLoadModule
     let calls = 0
-    w.AscFonts.onLoadModule = function () {
+    h.AscFonts.onLoadModule = function () {
       calls++
       if (calls === 1) { prev && prev(); return } // glue 尾部同步调用：wasm 未就绪，放过
       try {
-        const asc = w.AscFonts as AscGlue
+        const asc = h.AscFonts as AscGlue
         // Hyphen_Init 已由 glue postRun 调用（与本次同链）—— 勿重复，否则泄漏两个应用实例
         const lib = asc.FT_CreateLibrary()
         if (!lib) return reject(new Error('FT_CreateLibrary failed'))
@@ -629,11 +636,46 @@ export function loadEngine(): Promise<FontEngine> {
         reject(e)
       }
     }
-    const s = document.createElement('script')
-    s.type = 'text/javascript'
-    s.src = '/fonts/fonts.js'
-    s.onerror = () => reject(new Error('fonts.js load failed'))
-    document.head.appendChild(s)
+    const glue = fontAssetUrl('/fonts/fonts.js')
+    if (typeof document !== 'undefined') {
+      // 主线程：script 标签注入，document.currentScript 天然可定位 scriptDirectory
+      const s = document.createElement('script')
+      s.type = 'text/javascript'
+      s.src = glue
+      s.onerror = () => reject(new Error('fonts.js load failed'))
+      document.head.appendChild(s)
+      return
+    }
+    // Worker：无 document/head，script 标签路线整体不可用（相对 URL 也解析不了）。
+    // glue 是 (function(window,undefined){…})(window,undefined) 的 IIFE —— fetch 源码后
+    // 以 new Function('window', src) 传假 window 即命中；假 window.document.currentScript.src
+    // 给 glue 定位 scriptDirectory（→ 同目录 fonts.wasm 的绝对 URL）。
+    // 实测（glue-probe）：双握手到位、fonts.wasm 200、FT_CreateLibrary 成功。
+    const doc = {
+      currentScript: { src: glue },
+      head: { appendChild() {} },
+      createElement: () => ({ set src(_v: string) {}, set type(_v: string) {} }),
+    }
+    h.window = {
+      location: h.location,
+      navigator: h.navigator,
+      fetch: (...a: Parameters<typeof h.fetch>) => h.fetch(...a),
+      setImmediate: (fn: () => void) => h.setTimeout(fn, 0),
+      document: doc,
+      AscFonts: h.AscFonts,
+      AscCommon: h.AscCommon,
+    }
+    h.document = doc
+    void h.fetch(glue)
+      .then((r: Response) => {
+        if (!r.ok) throw new Error(`fonts.js load failed: ${r.status}`)
+        return r.text()
+      })
+      .then((src: string) => {
+        // eslint-disable-next-line no-new-func
+        new Function('window', src)(h.window)
+      })
+      .catch((e: unknown) => reject(e instanceof Error ? e : new Error(String(e))))
   })
   return enginePromise
 }

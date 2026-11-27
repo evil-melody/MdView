@@ -85,7 +85,7 @@ const BY_CMD: Record<string, string> = {
   clearCells: 'clear', insertFunc: 'formula', focusFormula: 'formula', recalc: 'rotate',
   bookOp: 'sheet', switchSheet: 'sheet', gridlines: 'grid', addSlide: 'slide',
   duplicate: 'copy', deleteSlide: 'clear', moveSlide: 'sort', hidden: 'view',
-  insertShape: 'shape', order: 'order', duplicateShape: 'copy', deleteShape: 'clear',
+  insertShape: 'shape', order: 'order', duplicateShape: 'copy', deleteShape: 'clear', distribute: 'order',
   shapeFill: 'shade', shapeLine: 'border', shapeLineWidth: 'line', shapeDash: 'line',
   slideBg: 'shade', anchor: 'anchor', setView: 'view', fit: 'fit', presentFrom: 'present',
   alignOn: 'align-center', imageScale: 'image', setAltText: 'comment', insertText: 'symbol',

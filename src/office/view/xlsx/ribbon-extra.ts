@@ -51,6 +51,16 @@ export interface RibbonCtx {
   allSheets: () => { index: number; name: string; path: string; hidden: boolean }[]
   /** 全表数据（统计 / 拼写检查用） */
   readAll: () => Promise<{ m: string[][]; lastR: number; lastC: number }>
+  /** 打开插入函数向导（公式入口的 Office 语义，非半截公式续写） */
+  openFunc: (fn?: string) => void
+  /** 活动格当前字号（pt）：从样式模型读（xf css / baseFont），供增大/减小字号步进。
+   *  旧实现 getComputedStyle 反推 px，受 zoom/字体替换影响，读值失真（报障⑤）。 */
+  cellFontPt: () => number
+  /** 大纲分组（Excel 数据>分级>组合/取消组合）：编排在 useSheetAnalysis，落 hideRows */
+  group: (g: RibbonRange) => Promise<{ ok: boolean; msg: string }>
+  ungroup: (g: RibbonRange) => Promise<{ ok: boolean; msg: string }>
+  /** 批注增删后通知视图重拉标记层（comments.list → 特征层角标） */
+  refreshComments: () => void
 }
 
 /** 列号 → 列字母（A / AA …） */
@@ -134,6 +144,19 @@ async function cellInput(ctx: RibbonCtx, r: number, c: number): Promise<string> 
   return String(d.formula || d.value || '')
 }
 
+/** 选区 → 剪贴板矩阵（相对坐标，空格位保留 input:''，粘贴后结构不错位——报障⑥）。
+ *  上限 4000 格：按行序截断，截断后仍保持完整的行×列矩形。 */
+async function clipMatrix(ctx: RibbonCtx, sel: RibbonRange): Promise<{ r: number; c: number; input: string }[]> {
+  const w = sel.c1 - sel.c0 + 1
+  const h = sel.r1 - sel.r0 + 1
+  const rows = Math.min(h, Math.max(1, Math.floor(4000 / w)))
+  const out: { r: number; c: number; input: string }[] = []
+  for (let r = 0; r < rows; r++)
+    for (let c = 0; c < w; c++)
+      out.push({ r, c, input: await cellInput(ctx, sel.r0 + r, sel.c0 + c) })
+  return out
+}
+
 /** 全部 A 级命令 */
 export function makeRibbonExtra(ctx: RibbonCtx): Record<string, (...args: any[]) => unknown> {
   const g = () => ctx.range()
@@ -164,31 +187,19 @@ export function makeRibbonExtra(ctx: RibbonCtx): Record<string, (...args: any[])
 
   const cmds: Record<string, (...args: any[]) => unknown> = {
     // ---------------- 剪贴板
+    /** 复制/剪切选区 → 内部剪贴板。空格位**保留**（矩阵保持选区宽高，报障⑥）：
+     *  旧实现跳过空格，粘贴后列结构错位。上限 4000 格，超出截断并保持行×列对齐。 */
     copyRange: async () => {
       const sel = g()
-      const cells: { r: number; c: number; input: string }[] = []
-      for (let r = sel.r0; r <= sel.r1 && cells.length < 4000; r++) {
-        for (let c = sel.c0; c <= sel.c1 && cells.length < 4000; c++) {
-          const input = await cellInput(ctx, r, c)
-          if (input === '') continue
-          cells.push({ r: r - sel.r0, c: c - sel.c0, input })
-        }
-      }
+      const cells = await clipMatrix(ctx, sel)
       clip = { cells, w: sel.c1 - sel.c0 + 1, h: sel.r1 - sel.r0 + 1 }
       return `已复制 ${cells.length} 个单元格`
     },
     cutRange: async () => {
       const sel = g()
-      const cells: { r: number; c: number; input: string }[] = []
-      for (let r = sel.r0; r <= sel.r1 && cells.length < 4000; r++) {
-        for (let c = sel.c0; c <= sel.c1 && cells.length < 4000; c++) {
-          const input = await cellInput(ctx, r, c)
-          if (input === '') continue
-          cells.push({ r: r - sel.r0, c: c - sel.c0, input })
-        }
-      }
+      const cells = await clipMatrix(ctx, sel)
       clip = { cells, w: sel.c1 - sel.c0 + 1, h: sel.r1 - sel.r0 + 1 }
-      const clear: { r: number; c: number; input: string }[] = cells.map((x) => ({ r: x.r + sel.r0, c: x.c + sel.c0, input: '' }))
+      const clear = cells.map((x) => ({ r: x.r + sel.r0, c: x.c + sel.c0, input: '' }))
       if (clear.length) await ctx.call('xlsx.set', ctx.sheet(), clear)
       ctx.reload()
       ctx.changed()
@@ -205,18 +216,14 @@ export function makeRibbonExtra(ctx: RibbonCtx): Record<string, (...args: any[])
     },
 
     // ---------------- 字体 / 对齐
+    /** 增大/减小字号：当前 pt 从单元格样式模型读（ctx.cellFontPt），按 Excel 阶梯步进（报障⑤）。 */
     fontSizeStep: (delta: number) => {
-      const { r, c } = ctx.sel()
-      const el = cellEl(r, c)
-      let cur = 11
-      if (el) {
-        const px = parseFloat(getComputedStyle(el).fontSize || '')
-        if (Number.isFinite(px) && px > 0) cur = Math.round((px * 0.75) * 10) / 10
-      }
+      const cur = ctx.cellFontPt()
       const ladder = SIZE_LADDER
       let next = cur
       if (delta > 0) next = ladder.find((v) => v > cur) ?? ladder[ladder.length - 1]
       else for (let i = ladder.length - 1; i >= 0; i--) if (ladder[i] < cur) { next = ladder[i]; break }
+      if (next === cur) return `字号 ${cur}pt 已是${delta > 0 ? '最大' : '最小'}阶梯`
       ctx.fmt({ sz: next })
       return `字号 ${cur}pt → ${next}pt`
     },
@@ -284,22 +291,19 @@ export function makeRibbonExtra(ctx: RibbonCtx): Record<string, (...args: any[])
       const { r, c } = ctx.sel()
       const el = q<HTMLInputElement>('.ov-formula-input')
       if (!el) return '编辑栏不可用'
-      el.value = `=${a1(r, c)}`
+      // Office 语义：在编辑栏光标处插入引用，不覆盖已有公式
+      const ref = a1(r, c)
+      const cur = el.value || '='
+      const at = el.selectionStart ?? cur.length
+      el.value = cur.slice(0, at) + ref + cur.slice(at)
       el.dispatchEvent(new Event('input', { bubbles: true }))
       el.focus()
-      return `已在公式中使用 ${a1(r, c)}`
+      el.setSelectionRange(at + ref.length, at + ref.length)
+      return `已在公式中使用 ${ref}`
     },
-    insertFormula: async () => {
-      const v = await officePrompt('插入函数', 'SUM', '函数名')
-      if (!v) return ''
-      const name = v.trim().toUpperCase()
-      const el = q<HTMLInputElement>('.ov-formula-input')
-      if (el) {
-        el.value = `=${name}(`
-        el.dispatchEvent(new Event('input', { bubbles: true }))
-        el.focus()
-      }
-      return `已插入 ${name}()`
+    insertFormula: () => {
+      ctx.openFunc()
+      return '插入函数'
     },
     recentFunctions: (): Opt[] => {
       const key = 'mdview.xlsx.recentFunctions'
@@ -397,7 +401,10 @@ export function makeRibbonExtra(ctx: RibbonCtx): Record<string, (...args: any[])
     calcMode: (mode: string) => {
       ctx.bar.calcMode = mode
       if (mode === 'auto') void cmds.calcNow()
-      return `计算选项：${mode === 'auto' ? '自动' : mode === 'autoNoTable' ? '自动（不含数据表）' : '手动'}`
+      // ponytail: 内核 calcPr 未落盘，manual 只影响本会话提示，不阻止自动重算；
+      // 升级路径 = xlsx 内核加 calcPr 写回门。此处如实告知，避免按钮名实不符。
+      const label = mode === 'auto' ? '自动' : mode === 'autoNoTable' ? '自动（不含数据表）' : '手动'
+      return `计算选项：${label}${mode === 'manual' ? '（仅本会话标记，内核暂不落盘 calcPr）' : ''}`
     },
     refreshAll: async () => {
       const feats = (await ctx.call('xlsx.features', ctx.sheet())) as {
@@ -535,6 +542,7 @@ export function makeRibbonExtra(ctx: RibbonCtx): Record<string, (...args: any[])
         text,
         at: { sheet: sheet.path, r, c }
       })
+      ctx.refreshComments()
       ctx.changed()
       return `已在 ${a1(r, c)} 添加注释`
     },
@@ -545,6 +553,7 @@ export function makeRibbonExtra(ctx: RibbonCtx): Record<string, (...args: any[])
       const hit = list.find((x) => x.at && x.at.sheet === sheet?.path && x.at.r === r && x.at.c === c)
       if (!hit) return `${a1(r, c)} 没有注释`
       await ctx.call('comments.set', hit.id, null)
+      ctx.refreshComments()
       ctx.changed()
       return `已删除 ${a1(r, c)} 的注释`
     },
@@ -570,9 +579,11 @@ export function makeRibbonExtra(ctx: RibbonCtx): Record<string, (...args: any[])
       await officeAlert('批注', lines.join('\n'))
       return `批注：${list.length} 条`
     },
+    /** 隐藏批注开关（报障⑦）：真实消费层在 OfficeSheetFeatureLayer 的批注角标——
+     *  bar.commentHidden 由视图 watch 后传入特征层，勾上即隐藏全部角标（Excel「隐藏/显示批注」语义）。 */
     commentHideAll: (on: boolean) => {
       ctx.bar.commentHidden = on
-      return on ? '已隐藏全部批注' : '已显示全部批注'
+      return on ? '已隐藏批注标记' : '已显示批注标记'
     },
 
     // ---------------- 视图类（DOM 实现）
@@ -704,25 +715,16 @@ export function makeRibbonExtra(ctx: RibbonCtx): Record<string, (...args: any[])
     },
 
     // ---------------- 数据分析
+    /** 「组合」（Excel 数据>分级>组合，报障⑧）：把选区各行按大纲级别分组（落 hideRows，
+     *  行头出现 −/+ 折叠柄）。旧实现只是把选区求和写左上格，名实不符。 */
     consolidate: async () => {
-      const sel = g()
-      const data = await ctx.readAll()
-      let sum = 0
-      let n = 0
-      for (let r = sel.r0; r <= sel.r1; r++) {
-        for (let c = sel.c0; c <= sel.c1; c++) {
-          const t = String(data.m[r]?.[c] ?? '').trim()
-          if (!t) continue
-          const v = Number(t.replace(/[,\s¥$%]/g, ''))
-          if (Number.isFinite(v)) { sum += v; n++ }
-        }
-      }
-      if (!n) return '组合：选区里没有数值'
-      const text = String(Math.round(sum * 1e10) / 1e10)
-      await ctx.call('xlsx.set', ctx.sheet(), [{ r: sel.r0, c: sel.c0, input: text }])
-      ctx.reload()
-      ctx.changed()
-      return `组合：${n} 个数值合计 ${text}`
+      const res = await ctx.group(g())
+      return res.msg
+    },
+    /** 「取消组合」：清除选区行的分组折叠并恢复行显示。 */
+    ungroup: async () => {
+      const res = await ctx.ungroup(g())
+      return res.msg
     },
   }
   return cmds

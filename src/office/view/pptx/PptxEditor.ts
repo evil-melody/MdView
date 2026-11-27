@@ -119,6 +119,17 @@ export class PptxEditor implements RichHost<EPara> {
     this.onState?.(null)
   }
 
+  /** 丢弃退出（Esc）：不提交，摘监听，清状态 */
+  discard() {
+    clearTimeout(this.timer)
+    this.changedSinceCommit = false
+    this.input.detach()
+    this.sid = -1
+    this.slide = -1
+    this.body = undefined
+    this.onState?.(null)
+  }
+
   text(): TextBody | undefined {
     if (!this.body) return undefined
     const counters: number[] = []

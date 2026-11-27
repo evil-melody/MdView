@@ -1317,16 +1317,20 @@ export async function setHeaderFooter(doc: DocxDocument, set: HFSet): Promise<HF
     undo.evenAndOddHeaders = evenWas
     doc.evenOddSet = true
   }
+  if (set.trackChanges !== undefined) {
+    undo.trackChanges = doc.trackSet ?? doc.track
+    // stays defined once touched: reverting to the file's value must still remove an element an earlier save wrote
+    doc.trackSet = set.trackChanges
+  }
   doc.sectTouched = true
   doc.markEdited()
   const headers = (await doc.headers()) ?? {}
-  return { headers, titlePg: doc.titlePgSet ?? doc.titlePg, evenAndOddHeaders: doc.evenOddSet ?? doc.evenOdd, undo }
+  return { headers, titlePg: doc.titlePgSet ?? doc.titlePg, evenAndOddHeaders: doc.evenOddSet ?? doc.evenOdd, trackChanges: doc.trackSet ?? doc.track, undo }
 }
 
-/** writes w:evenAndOddHeaders into settings.xml (creating the part / rel / content type when missing) */
-async function applyEvenOdd(doc: DocxDocument): Promise<void> {
-  if (doc.evenOddSet === undefined) return
-  const on = doc.evenOddSet
+/** writes w:evenAndOddHeaders / w:trackChanges into settings.xml (creating the part / rel / content type when missing) */
+async function applySettings(doc: DocxDocument): Promise<void> {
+  if (doc.evenOddSet === undefined && doc.trackSet === undefined) return
   const path = doc.settingsPath ?? 'word/settings.xml'
   let created = false
   if (!doc.settingsPath || !doc.pkg.has(path)) {
@@ -1340,8 +1344,20 @@ async function applyEvenOdd(doc: DocxDocument): Promise<void> {
   const root = rootEl(nodes)
   if (!root) return
   const W = prefixOf(root.q) || 'w:'
-  removeKids(root, 'evenAndOddHeaders')
-  if (on) root.c.push(el(W + 'evenAndOddHeaders'))
+  if (doc.evenOddSet !== undefined) {
+    removeKids(root, 'evenAndOddHeaders')
+    if (doc.evenOddSet) root.c.push(el(W + 'evenAndOddHeaders'))
+  }
+  if (doc.trackSet !== undefined) {
+    removeKids(root, 'trackChanges')
+    if (doc.trackSet) {
+      // CT_Settings puts trackChanges ahead of evenAndOddHeaders
+      const at = root.c.findIndex((c) => isNode(c) && local(c.q) === 'evenAndOddHeaders')
+      const node = el(W + 'trackChanges')
+      if (at < 0) root.c.push(node)
+      else root.c.splice(at, 0, node)
+    }
+  }
   root.self = false
   doc.pkg.setPart(path, serialize(nodes))
   if (created) doc.rels = await doc.pkg.rels(doc.mainPath)
@@ -1367,7 +1383,7 @@ function applyHF(sect: RNode, doc: DocxDocument) {
 
 export async function saveDocx(doc: DocxDocument): Promise<Blob> {
   if (!doc.ready) throw new Error('Document is still loading')
-  await applyEvenOdd(doc)
+  await applySettings(doc)
   const comments = doc.comments
   let body: string | undefined
   if (doc.groups.size || doc.itemXml.size) {

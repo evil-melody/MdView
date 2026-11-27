@@ -4,10 +4,11 @@
  * 缩略图按可见性懒加载，文本形状可就地编辑并写回 OOXML。
  */
 import { ref, shallowRef, shallowReactive, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import type { DocumentClient, OpenResult, SlideModel, SlideEl } from '../client'
+import type { DocumentClient, OpenResult, SlideModel, SlideEl, PresentationMeta } from '../client'
 import type { AnimPreset, Box, ShapeOp } from '../core/pptx/types'
 import type { ChartData } from '../core/pptx/types'
 import { MediaCache } from '../media'
+import { usePptxTextEdit } from '../composables/usePptxTextEdit'
 import OfficeSlideCanvas from './OfficeSlideCanvas.vue'
 import OfficeSlideThemePanel from './OfficeSlideThemePanel.vue'
 import OfficeChartDataDialog from './OfficeChartDataDialog.vue'
@@ -18,6 +19,7 @@ const emit = defineEmits<{ (e: 'change'): void; (e: 'error', m: string): void }>
 const meta = shallowRef(props.info.pptx!)
 const index = ref(0)
 const slide = shallowRef<SlideModel | null>(null)
+const rootEl = ref<HTMLElement | null>(null)
 const stageEl = ref<HTMLElement | null>(null)
 const listEl = ref<HTMLElement | null>(null)
 const scale = ref(1)
@@ -39,6 +41,17 @@ const transCls = ref('')
 let transTimer: ReturnType<typeof setTimeout> | null = null
 const hasAnims = computed(() => !!(slide.value?.animSeq?.length || slide.value?.els.some((e) => e.anim)))
 const notesText = computed(() => slide.value?.notes ?? '')
+
+/** 形状文本富编辑（修复⑥）：PptxEditor 生命周期 + 编辑层 HTML，命令面在下面 commands 接线 */
+const texEdit = usePptxTextEdit(props.client, {
+  currentIndex: () => index.value,
+  currentModel: () => slide.value,
+  onCommitted: (i, model) => {
+    if (i === index.value) adopt(model, i)
+    emit('change')
+  },
+  onError: (m) => emit('error', m),
+})
 
 /** 缩略图模型缓存：结构变更时整体失效；当前页编辑后只更新该页 */
 const thumbs = shallowReactive(new Map<number, SlideModel>())
@@ -196,6 +209,9 @@ function fit() {
 function adopt(model: SlideModel, i: number) {
   slide.value = model
   index.value = i
+  // 修复②：隐藏按钮态随当前页更新（ribbon toggle 读 bar.hidden；meta 由
+  // slideOp / undo 的 refreshMeta 带回 hidden 标志）
+  bar.hidden = meta.value.slides[i]?.hidden ?? false
   if (thumbs.get(i) !== model) thumbs.set(i, model)
   // 结构变更（删除等）后裁掉越界选择，避免指向已不存在的形状
   const s = selEls.value.filter((k) => k < model.els.length)
@@ -210,6 +226,8 @@ let loadSeq = 0
 async function load(i: number) {
   lastPoint = null
   const seq = ++loadSeq
+  // 切页 = 离开当前形状：提交并摘掉编辑层（PptxEditor 是单形状编辑）
+  texEdit.stop()
   // 缩略图已取过模型：直接切页，不再发 RPC
   const cached = thumbs.get(i)
   if (cached) {
@@ -251,12 +269,9 @@ function scrollThumbIntoView(i: number) {
 }
 watch(index, (i) => nextTick(() => { scrollThumbIntoView(i); clearSel() }))
 
-/** 形状文本提交：走 ShapeOp('shapeText') 按 OOXML id 定位 p:sp，editSlide 记 undo。
- *  不再调用 pptx.setText —— 它会清掉当前页全部 undo/redo，且继承版式占位符无 sid 时静默失败。 */
-async function commitText(p: { i: number; el: Extract<SlideEl, { t: 'shape' }>; lines: string[] }) {
-  if (!props.editable || !p.el.text) return
-  await applyShapes({ op: 'shapeText', top: topId(p.i), lines: p.lines })
-}
+/** 形状文本编辑（修复⑥）：双击进 PptxEditor 富编辑，格式 / 文本经 pptx.setText
+ *  写真实 OOXML（a:rPr / a:pPr）；纯文本提交路径（ShapeOp shapeText）已由内核探针
+ *  __smoke-p5 直接调用 RPC 覆盖，视图不再需要。 */
 
 /** 一次 RPC 发一条或多条 ops（内核 shapeOps 循环处理） */
 async function applyShapes(op: ShapeOp | ShapeOp[]) {
@@ -322,7 +337,7 @@ async function insertImageBlob(blob: Blob) {
 /** 文档级 paste：只取 image Blob；焦点在输入/可编辑区时不抢文本粘贴 */
 function onPaste(ev: ClipboardEvent) {
   if (!props.editable || ev.defaultPrevented) return
-  if (stageEl.value && stageEl.value.offsetParent === null) return
+  if (rootEl.value && rootEl.value.offsetParent === null) return
   const a = document.activeElement as HTMLElement | null
   if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable)) return
   const items = ev.clipboardData?.items
@@ -356,7 +371,7 @@ function cellAnchor(): { i: number; ri: number; ci: number } {
   return lastCell ?? { i: selEl.value, ri: 0, ci: 0 }
 }
 function commitCell(p: { i: number; ri: number; ci: number; lines: string[] }) {
-  void applyShapes({ op: 'cellText', top: topId(p.i), row: p.ri, col: p.ci, text: p.lines.join('\n') })
+  void applyShapes({ op: 'cellText', top: ownId(p.i), row: p.ri, col: p.ci, text: p.lines.join('\n') })
 }
 function commitDgm(p: { i: number; nodeId: string; lines: string[] }) {
   void applyShapes({ op: 'dgmText', top: topId(p.i), node: p.nodeId, text: p.lines.join('\n') })
@@ -388,6 +403,12 @@ function topId(i: number): number {
   return slide.value?.els[i]?.top ?? i
 }
 
+/** 内容/格式 op 用元素自身 id：组内子形状 = 子 id（顶层 oid === top） */
+function ownId(i: number): number {
+  const el = slide.value?.els[i]
+  return el?.oid ?? el?.top ?? i
+}
+
 function clearSel() {
   selEls.value = []
   selEl.value = -1
@@ -410,6 +431,20 @@ function onSelectSet(ids: number[]) {
   selEl.value = ids.length ? ids[ids.length - 1] : -1
 }
 
+/** ---------- 画布文本编辑事件（修复⑥） ---------- */
+function onTextEdit(i: number) {
+  if (!props.editable) return
+  // 进编辑即单选该形状：格式命令的作用域要明确
+  selEls.value = [i]
+  selEl.value = i
+  texEdit.start(i)
+}
+function onTextKey(ev: KeyboardEvent) {
+  // Esc 丢弃退出；⌘/Ctrl+Enter 提交退出（RichInput 不拦这两个键）
+  if (ev.key === 'Escape') { ev.preventDefault(); texEdit.cancel() }
+  else if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); texEdit.stop() }
+}
+
 /** Canvas 松手后的最终几何：转成多条 xfrm 一次写回内核 */
 function onTransform(changes: { i: number; box: Box }[]) {
   if (!props.editable || !changes.length) return
@@ -419,6 +454,8 @@ function onTransform(changes: { i: number; box: Box }[]) {
 
 function deleteSelection() {
   if (!slide.value || !selEls.value.length) return
+  // 删除正在编辑的形状：先退出富编辑层，避免编辑层悬挂在已不存在的 els 索引上
+  if (texEdit.editIdx.value >= 0 && selEls.value.includes(texEdit.editIdx.value)) texEdit.stop()
   // 索引从大到小，避免删除时后续 top 错位
   const ops: ShapeOp[] = [...selEls.value].sort((a, b) => b - a).map((i) => ({ op: 'delete', top: topId(i) }))
   void applyShapes(ops)
@@ -484,67 +521,62 @@ const commands = {
     const s = slide.value
     if (!s) return
     if (kind === 'image') {
-      if (!blob) return emit('error', '请先选择图片文件')
+      if (!blob) return '请先选择图片文件'
       return insertImageBlob(blob)
     }
     const box: Box = { x: s.w * 0.25, y: s.h * 0.3, w: s.w * 0.5, h: Math.min(120, s.h * 0.2) }
     await applyShapes({ op: 'insert', kind, box, text: kind === 'text' ? '双击编辑文字' : undefined })
   },
   insertText: () => commands.insertShape('text'),
+  /** 修复④：叠放 / 填充 / 线条命令作用于全部选中形状（多条 ShapeOp 一次下发），
+   *  未选中时 return 提示串走 OfficeToolbar toast */
   order: (to: 'front' | 'back' | 'forward' | 'backward') =>
-    needSel() ? applyShapes({ op: 'order', top: topId(selEl.value), to }) : emit('error', '请先选中形状'),
-  duplicateShape: () => (needSel() ? duplicateSelection() : emit('error', '请先选中形状')),
-  deleteShape: () => (needSel() ? deleteSelection() : emit('error', '请先选中形状')),
-  shapeFill: (color: string | null) => (needSel() ? applyShapes({ op: 'fill', top: topId(selEl.value), color }) : emit('error', '请先选中形状')),
-  shapeLine: (color: string | null) => (needSel() ? applyShapes({ op: 'line', top: topId(selEl.value), color }) : emit('error', '请先选中形状')),
-  shapeLineWidth: (w: number) => (needSel() ? applyShapes({ op: 'line', top: topId(selEl.value), w }) : emit('error', '请先选中形状')),
-  shapeDash: (dash: string) => (needSel() ? applyShapes({ op: 'line', top: topId(selEl.value), dash }) : emit('error', '请先选中形状')),
+    needSel() ? applyShapes(selEls.value.map((i) => ({ op: 'order', top: topId(i), to }))) : '请先选中形状',
+  duplicateShape: () => (needSel() ? duplicateSelection() : '请先选中形状'),
+  deleteShape: () => (needSel() ? deleteSelection() : '请先选中形状'),
+  shapeFill: (color: string | null) =>
+    needSel() ? applyShapes(selEls.value.map((i) => ({ op: 'fill', top: ownId(i), color }))) : '请先选中形状',
+  shapeLine: (color: string | null) =>
+    needSel() ? applyShapes(selEls.value.map((i) => ({ op: 'line', top: ownId(i), color }))) : '请先选中形状',
+  shapeLineWidth: (w: number) =>
+    needSel() ? applyShapes(selEls.value.map((i) => ({ op: 'line', top: ownId(i), w }))) : '请先选中形状',
+  shapeDash: (dash: string) =>
+    needSel() ? applyShapes(selEls.value.map((i) => ({ op: 'line', top: ownId(i), dash }))) : '请先选中形状',
   slideBg: (color: string | null) => applyShapes({ op: 'bg', color }),
-  anchor: (a: 't' | 'ctr' | 'b') => {
-    const el = needSel() ? slide.value?.els[selEl.value] : undefined
-    const sid = el && el.t === 'shape' ? el.sid : undefined
-    return sid ? applyShapes({ op: 'anchor', sid, anchor: a }) : emit('error', '请先选中文本形状')
-  },
+  /** 修复⑤：文本垂直对齐按顶层 id 定位（不再要求 sid），覆盖 sp / 组内文本形状 /
+   *  表格 graphicFrame（内核 anchor 分支写全部 a:tcPr@anchor）；作用于全部选中项 */
+  anchor: (a: 't' | 'ctr' | 'b') =>
+    needSel() ? applyShapes(selEls.value.map((i) => ({ op: 'anchor', top: ownId(i), anchor: a }))) : '请先选中形状',
   undo: async (redo = false) => {
-    const r = await props.client.call('pptx.undo', redo)
-    if (r) adopt(r.model, r.index)
+    const r = (await props.client.call('pptx.undo', redo)) as { index: number; model: SlideModel; meta?: PresentationMeta } | null
+    if (!r) return
+    // 幻灯片级操作（add/delete/move/hide）的 undo：presentation.xml 变了，先刷新页列表
+    if (r.meta) {
+      meta.value = r.meta
+      invalidateThumbs()
+    }
+    texEdit.stop()
+    adopt(r.model, r.index)
+    emit('change')
   },
+  /** 修复③：PowerPoint「对齐」恒贴幻灯片边界（多选也一样），不再按外接矩形互相对齐 */
   alignOn: (dir: string) => {
-    if (!needSel()) return emit('error', '请先选中形状')
+    if (!needSel()) return '请先选中形状'
     const s = slide.value
     if (!s) return
-    // 多选：按选中形状的外接矩形对齐；单形状：保持贴幻灯片行为
-    const ids = selEls.value.length > 1 ? [...selEls.value] : [selEl.value]
-    if (ids.length > 1) {
-      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
-      for (const i of ids) {
-        const b = s.els[i].box
-        x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y)
-        x1 = Math.max(x1, b.x + b.w); y1 = Math.max(y1, b.y + b.h)
-      }
-      const ops: ShapeOp[] = ids.map((i) => {
-        const b = { ...s.els[i].box }
-        if (dir === 'left') b.x = x0
-        else if (dir === 'center') b.x = x0 + (x1 - x0 - b.w) / 2
-        else if (dir === 'right') b.x = x1 - b.w
-        else if (dir === 'top') b.y = y0
-        else if (dir === 'middle') b.y = y0 + (y1 - y0 - b.h) / 2
-        else if (dir === 'bottom') b.y = y1 - b.h
-        return { op: 'xfrm', top: topId(i), box: b }
-      })
-      void applyShapes(ops)
-      return
-    }
-    const box = { ...s.els[selEl.value].box }
-    if (dir === 'left') box.x = 0
-    if (dir === 'center') box.x = (s.w - box.w) / 2
-    if (dir === 'right') box.x = s.w - box.w
-    if (dir === 'top') box.y = 0
-    if (dir === 'middle') box.y = (s.h - box.h) / 2
-    if (dir === 'bottom') box.y = s.h - box.h
-    void applyShapes({ op: 'xfrm', top: topId(selEl.value), box })
+    const ops: ShapeOp[] = selEls.value.map((i) => {
+      const box = { ...s.els[i].box }
+      if (dir === 'left') box.x = 0
+      if (dir === 'center') box.x = (s.w - box.w) / 2
+      if (dir === 'right') box.x = s.w - box.w
+      if (dir === 'top') box.y = 0
+      if (dir === 'middle') box.y = (s.h - box.h) / 2
+      if (dir === 'bottom') box.y = s.h - box.h
+      return { op: 'xfrm', top: topId(i), box }
+    })
+    void applyShapes(ops)
   },
-  /** 分布：横向/纵向等间距（ribbon 当前无按钮，命令已备，用多条 xfrm） */
+  /** 分布：横向/纵向等间距（ribbon「排列」组入口，用多条 xfrm） */
   distribute: (dir: 'h' | 'v') => {
     const s = slide.value
     const ids = [...selEls.value]
@@ -576,26 +608,43 @@ const commands = {
   tableRow: (kind: 'add' | 'delete') => {
     if (!needSel()) return emit('error', '请先选中表格')
     const c = cellAnchor()
-    void applyShapes({ op: 'tblRow', top: topId(c.i), kind, at: c.ri })
+    void applyShapes({ op: 'tblRow', top: ownId(c.i), kind, at: c.ri })
   },
   tableCol: (kind: 'add' | 'delete') => {
     if (!needSel()) return emit('error', '请先选中表格')
     const c = cellAnchor()
-    void applyShapes({ op: 'tblCol', top: topId(c.i), kind, at: c.ci })
+    void applyShapes({ op: 'tblCol', top: ownId(c.i), kind, at: c.ci })
   },
   /** 选中形状的动画（右键菜单；entrance/emphasis/exit 各 preset；null = 移除） */
   shapeAnim: (preset: AnimPreset | null) => {
     if (!needSel()) return emit('error', '请先选中形状')
-    void applyShapes({ op: 'anim', top: topId(selEl.value), preset })
+    void applyShapes({ op: 'anim', top: ownId(selEl.value), preset })
   },
   /** 当前页切换效果（右键菜单下拉；null = 移除） */
   slideTransition: (kind: 'fade' | 'wipe' | 'push' | 'cut' | null) => {
     void applyShapes({ op: 'transition', kind })
   },
   /** 打开当前选中图表的数据编辑面板（右键菜单入口 / canvas 双击共用） */
-  chartData: () => (needSel() ? openChartDlg(selEl.value) : emit('error', '请先选中图表')),
+  chartData: () => (needSel() ? openChartDlg(selEl.value) : '请先选中图表'),
+  /** ---------- 修复⑥：字体 / 段落命令（与 DOCX 同一套命令名） ----------
+   *  作用于 PptxEditor 的活动编辑选区，格式落到真实 OOXML（a:rPr / a:pPr）。
+   *  未进编辑时 return 提示串，走 OfficeToolbar 的 toast。 */
+  setFont: (name: string) => (texEdit.editor.active ? (texEdit.editor.setFont(name), undefined) : '请双击文本形状进入编辑后再设置字体'),
+  setSize: (pt: number) => (texEdit.editor.active ? (texEdit.editor.setSize(pt), undefined) : '请双击文本形状进入编辑后再设置字号'),
+  toggle: (k: 'b' | 'i' | 'u' | 'strike') => (texEdit.editor.active ? (texEdit.editor.toggle(k), undefined) : '请双击文本形状进入编辑'),
+  setColor: (c: string | null) => (texEdit.editor.active ? (texEdit.editor.setColor(c), undefined) : '请双击文本形状进入编辑后再设置字体颜色'),
+  setHighlight: (c: string | null) => (texEdit.editor.active ? (texEdit.editor.setHighlight(c), undefined) : '请双击文本形状进入编辑后再设置突出显示'),
+  sup: () => (texEdit.editor.active ? (texEdit.editor.toggleBaseline('sup'), undefined) : '请双击文本形状进入编辑'),
+  sub: () => (texEdit.editor.active ? (texEdit.editor.toggleBaseline('sub'), undefined) : '请双击文本形状进入编辑'),
+  setAlign: (a: 'left' | 'center' | 'right' | 'justify') => (texEdit.editor.active ? (texEdit.editor.setAlign(a), undefined) : '请双击文本形状进入编辑后再设置对齐'),
+  setLine: (v: number) => (texEdit.editor.active ? (texEdit.editor.setLineSpacing(v), undefined) : '请双击文本形状进入编辑后再设置行距'),
+  toggleList: (k: 'bullet' | 'number') => (texEdit.editor.active ? (texEdit.editor.toggleBullet(k), undefined) : '请双击文本形状进入编辑'),
+  indent: (d: 1 | -1) => (texEdit.editor.active ? (texEdit.editor.indentLevel(d as 1 | -1), undefined) : '请双击文本形状进入编辑'),
+  clearFormat: () => (texEdit.editor.active ? (texEdit.editor.clearFormat(), undefined) : '请双击文本形状进入编辑后再清除格式'),
   setView: (v: string) => {
+    texEdit.stop()
     bar.view = v
+    if (v === 'present') clearSel() // 放映态只读，进放映即丢形状选中态
     const stage = stageEl.value
     if (v === 'present') void stage?.requestFullscreen?.()
     else if (document.fullscreenElement) void document.exitFullscreen()
@@ -613,7 +662,8 @@ const commands = {
   current: () => index.value,
   count: () => meta.value.count
 }
-defineExpose({ commands, bar })
+
+defineExpose({ commands, bar, formatState: texEdit.format, editor: texEdit.editor, meta, index })
 
 /** PPT 右键菜单：幻灯片级 Office 操作（新建/复制/删除/隐藏/移动）、切换效果，
  *  形状级删除/动画、表格行列增删、SmartArt 提示、图表数据编辑 —— kind 由选中元素类型决定 */
@@ -646,12 +696,17 @@ function menuKindFor(el: SlideEl | undefined): MenuKind {
 /** 形状级键盘操作：焦点在 input / textarea / contenteditable 时不拦截 */
 function onKey(ev: KeyboardEvent) {
   if (!props.editable || ev.defaultPrevented) return
-  // 多个页签常驻 v-show：隐藏实例不响应全局按键
-  if (stageEl.value && stageEl.value.offsetParent === null) return
+  // 多个页签常驻 v-show：以组件根为基准（stage 在浏览视图下 display:none，不能当可见性基准）
+  if (rootEl.value && rootEl.value.offsetParent === null) return
   const a = document.activeElement as HTMLElement | null
   if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable)) return
   const mod = ev.ctrlKey || ev.metaKey
   const k = ev.key
+  // 放映态只读：Delete/方向键不得真改数据，Esc 退出放映（PowerPoint 语义）
+  if (bar.view === 'present') {
+    if (k === 'Escape') commands.setView('normal')
+    return
+  }
   if (mod && (k === 'a' || k === 'A')) {
     ev.preventDefault()
     const n = slide.value?.els.length ?? 0
@@ -660,6 +715,10 @@ function onKey(ev: KeyboardEvent) {
     return
   }
   if (mod && (k === 'd' || k === 'D')) { ev.preventDefault(); duplicateSelection(); return }
+  // 撤销/重做：内核（undoShapes）与命令面（commands.undo）早已在位，唯独缺键盘绑定——
+  // 形状删除/搬移/文本提交全部落了 undo 栈，按键却没人消费它。mac 无 Delete 键，⌘Z/⌘⇧Z 是唯一退路。
+  if (mod && (k === 'z' || k === 'Z')) { ev.preventDefault(); void commands.undo(ev.shiftKey); return }
+  if (mod && (k === 'y' || k === 'Y')) { ev.preventDefault(); void commands.undo(true); return }
   if (k === 'Escape') { clearSel(); pptMenu.value = null; return }
   if (k === 'Delete' || k === 'Backspace') {
     if (!selEls.value.length) return
@@ -677,11 +736,17 @@ function onKey(ev: KeyboardEvent) {
   }
 }
 
+/** 浏览器原生退出全屏（Esc / 系统手势）时同步视图状态，避免卡在放映态 */
+const onFullscreenChange = () => {
+  if (!document.fullscreenElement && bar.view === 'present') bar.view = 'normal'
+}
+
 onMounted(() => {
   ro = new ResizeObserver(fit)
   if (stageEl.value) ro.observe(stageEl.value)
   window.addEventListener('keydown', onKey)
   document.addEventListener('paste', onPaste)
+  document.addEventListener('fullscreenchange', onFullscreenChange)
   window.addEventListener('pointermove', onThumbMove)
   window.addEventListener('pointerup', endThumbDrag)
   window.addEventListener('pointercancel', endThumbDrag)
@@ -695,6 +760,7 @@ onBeforeUnmount(() => {
   thumbIo?.disconnect()
   window.removeEventListener('keydown', onKey)
   document.removeEventListener('paste', onPaste)
+  document.removeEventListener('fullscreenchange', onFullscreenChange)
   window.removeEventListener('pointermove', onThumbMove)
   window.removeEventListener('pointerup', endThumbDrag)
   window.removeEventListener('pointercancel', endThumbDrag)
@@ -703,7 +769,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="ov-slides" :class="{ 'ov-browse': bar.view === 'browse', 'ov-present': bar.view === 'present' }">
+  <div ref="rootEl" class="ov-slides" :class="{ 'ov-browse': bar.view === 'browse', 'ov-present': bar.view === 'present' }">
     <div ref="listEl" class="ov-slide-list">
       <button
         v-for="s in thumbList"
@@ -737,11 +803,15 @@ onBeforeUnmount(() => {
         :media="media"
         :play-seq="playSeq"
         :trans-cls="transCls"
+        :text-editing="texEdit.editLayer.value"
         @select="onSelect"
         @select-set="onSelectSet"
         @clear="clearSel"
         @transform="onTransform"
-        @commit="commitText"
+        @text-edit="onTextEdit"
+        @text-mount="(el) => texEdit.mount(el)"
+        @text-blur="texEdit.stop"
+        @text-key="onTextKey"
         @cell-edit="onCellEdit"
         @commit-cell="commitCell"
         @commit-dgm="commitDgm"

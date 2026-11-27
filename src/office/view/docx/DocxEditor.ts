@@ -11,47 +11,17 @@ import { cssFont } from '../../core/fonts'
 import type { DocumentClient } from '../../core/worker/client'
 import { opInsert, opInsertRuns, ordered, RichInput, type ReplaceOpts, type RichHost } from '../edit/input'
 import { htmlToParas } from '../../core/html'
-import { cellsIn, deleteCol, deleteRow, distributeCols, gridOf, insertCol, insertRow, mergeCells, newTable, patchCells, rectOf, setBorders, unmergeCell, type BorderPreset, type CellRect } from './tables'
+import { cellsIn, clearCellsText, deleteCol, deleteRow, distributeCols, gridOf, insertCol, insertRow, mergeCells, newTable, patchCells, rectOf, setBorders, unmergeCell, type BorderPreset, type CellRect } from './tables'
+import { formatFromState, formatPainterPatch, paraFromState } from './painter'
 import { changeSpans, hasChanges, resolveRuns, trackEdit } from './track'
 import { formatRangeFmt } from './fmtchange'
 import { applyParaPatch, resolvePara } from './pprchange'
 import { installMove, type MoveHost } from './move'
 import { SelSnapshot } from './selcache'
-import { collapsed, markRange, normalize, plen, rlen, runAt, runsText, shiftPa, splitRuns, type Pos, type RRun, type Sel } from '../edit/rich'
-
-/** a place in a paragraph that survives edits elsewhere: paragraph id, page-break part, offset */
-export interface ParaPos {
-  pid: number
-  k: number
-  o: number
-}
-
-/** what a new comment would cover */
-export interface CommentRange {
-  a: ParaPos
-  f: ParaPos
-  /** the text covered */
-  quote: string
-}
-
-/** where a comment thread is in the document */
-export interface CommentPlace {
-  /** first paragraph (block address) holding its text, and the offset there */
-  pa: string
-  o: number
-  /** the text it covers (paragraphs joined by spaces), shortened */
-  quote: string
-}
-
-const QUOTE_MAX = 200
-const WORD = /[\p{L}\p{N}_'’-]/u
-
-/** comment threads the runs mark */
-const marksOf = (ps: Paragraph[]) => {
-  const out = new Set<string>()
-  for (const p of ps) for (const r of p.runs) if (r.t === 'text' || r.t === 'img') for (const id of r.cm ?? []) out.add(id)
-  return out
-}
+import { charLooks, firstFont, moveSel, paraLook, reskin, runLook, sliceRunsOf, RUN_LOOK, PARA_LOOK } from './look'
+import { commentPlaces as placesOf, commentRange as rangeOf, markComment as markOf, marksOf, posOf as posOfOf, type CommentPlace, type CommentRange, type ParaPos } from './comments'
+export type { CommentPlace, CommentRange, ParaPos }
+import { collapsed, normalize, plen, rlen, runAt, runsText, shiftPa, splitRuns, type Pos, type RRun, type Sel } from '../edit/rich'
 
 export interface DocState {
   blocks: Block[]
@@ -96,6 +66,8 @@ export interface FormatState {
   style?: string
   lst?: 'bullet' | 'number'
   line?: number
+  /** left indent (pt) of the caret's paragraph */
+  indL?: number
   va?: 'sup' | 'sub'
   link?: string
   /** caret inside a table cell */
@@ -117,85 +89,6 @@ const path = (pa: string) => pa.split('.').map(Number)
 // a format-only edit has no text diff: trackEdit would mark the whole selection deleted+inserted.
 // Paragraph/format revisions are captured by fmtchange.ts / pprchange.ts instead.
 const UNTRACKED = new Set(['undo', 'redo', 'collab', 'accept', 'reject', 'restore', 'move', 'format', 'para', 'pagebreak', 'style'])
-
-const sliceRunsOf = (p: Paragraph, a: number, b: number) => splitRuns(splitRuns(p.runs as RRun[], b)[0], a)[1] as Inline[]
-
-/** the properties "update style to match" moves from the text into the style */
-const RUN_LOOK = ['b', 'i', 'u', 'strike', 'color', 'sz', 'font'] as const
-const PARA_LOOK = ['align', 'line', 'before', 'after'] as const
-
-/** a run's look, property by property, in the form two runs are compared in */
-const runLook = (s: RunStyle | undefined) => ({
-  b: !!s?.b,
-  i: !!s?.i,
-  u: s?.u && s.u !== 'none' ? s.u : 'none',
-  strike: !!s?.strike,
-  color: s?.color ?? 'auto',
-  sz: s?.sz,
-  font: s?.font,
-})
-
-const paraLook = (ps: ParaStyle) => ({
-  align: ps.align ?? 'left',
-  // a multiple of the line height only: fixed heights are not part of the look taken over
-  line: !ps.lineRule || ps.lineRule === 'auto' ? (ps.line ?? 1) : undefined,
-  before: ps.before ?? 0,
-  after: ps.after ?? 0,
-})
-
-/** the look of each character of a paragraph (an object counts as one) */
-const charLooks = (p: Paragraph) => p.runs.flatMap((r) => (r.t === 'text' ? Array<string>(r.text.length).fill(JSON.stringify(runLook(r.s))) : ['']))
-
-/** the font a CSS stack starts with */
-const firstFont = (css: string | undefined) => (css ? (/^\s*"?([^",]+)/.exec(css)?.[1] ?? css) : undefined)
-
-/**
- * `was` with the look of `now`: the same paragraph converted again after its style changed. Content, source
- * references and the user's own formatting stay those of `was`; null when the two do not hold the same content.
- */
-function reskin(was: Paragraph, now: Paragraph): Paragraph | null {
-  if (runsText(was.runs as RRun[]) !== runsText(now.runs as RRun[])) return null
-  const runs: Inline[] = []
-  let j = 0
-  let o = 0
-  // the run of `now` at the position reached (text runs already used up are passed)
-  const at = () => {
-    for (let n = now.runs[j]; n && n.t === 'text' && o >= n.text.length; n = now.runs[j]) {
-      j++
-      o = 0
-    }
-    return now.runs[j]
-  }
-  for (const w of was.runs) {
-    if (w.t !== 'text') {
-      const n = at()
-      if (!n || n.t !== w.t) return null
-      runs.push(w.t === 'box' && n.t === 'box' ? { ...w, blocks: n.blocks } : (w.t === 'field' || w.t === 'ref') && 's' in n ? { ...w, s: n.s } : w)
-      j++
-      o = 0
-      continue
-    }
-    for (let rest = w.text; rest; ) {
-      const n = at()
-      if (!n || n.t !== 'text') return null
-      const take = Math.min(rest.length, n.text.length - o)
-      runs.push({ ...w, text: rest.slice(0, take), s: n.s })
-      rest = rest.slice(take)
-      o += take
-    }
-  }
-  const marker = was.marker && now.marker ? { ...was.marker, s: now.marker.s } : was.marker
-  return { ...was, ps: now.ps, runs: normalize(runs as RRun[]) as Inline[], markSz: now.markSz, markFont: now.markFont, marker }
-}
-
-/** selection recorded around address `from`, re-based onto `to` (same container) */
-function moveSel(sel: Sel, from: string, to: string): Sel {
-  if (from === to) return sel
-  const dir = (pa: string) => pa.replace(/\.?\d+$/, '')
-  const d = Number(to.split('.').pop()) - Number(from.split('.').pop())
-  const mv = (p: Sel['a']) => (dir(p.pa) === dir(from) ? { ...p, pa: dir(to) ? `${dir(to)}.${Number(p.pa.split('.').pop()) + d}` : String(Number(p.pa.split('.').pop()) + d) } : p)
-  return { a: mv(sel.a), f: mv(sel.f) }
-}
 
 /** a model change: contiguous paragraphs replaced, or top-level blocks replaced */
 export type DocxCommit = { kind: 'paras'; before: Paragraph[]; next: Paragraph[] } | { kind: 'blocks'; bi: number; before: Block[]; next: Block[] }
@@ -227,6 +120,8 @@ export class DocxEditor implements RichHost<Paragraph> {
   onError?: (m: string) => void
   /** paint format: run formatting copied from the caret, applied to the next selection */
   painter: RunSet | null = null
+  /** paragraph formatting copied with it (alignment / line spacing / list), applied to the hit paragraphs */
+  painterPara: ParaDirty | null = null
   onPainter?: (on: boolean) => void
   /** every model change, after it was mirrored to the worker (collaboration hook) */
   onCommit?: (c: DocxCommit) => void
@@ -275,6 +170,11 @@ export class DocxEditor implements RichHost<Paragraph> {
     const c = this.container(pa)
     const b = c?.list[c.at]
     return b && b.t === 'p' && b.pid !== undefined && !b.ro ? b : undefined
+  }
+
+  /** CommentHost 面：批注层按文档序扫块树 */
+  get blocks(): Block[] {
+    return this.st.blocks
   }
 
   span(a: string, b: string): string[] | null {
@@ -329,6 +229,15 @@ export class DocxEditor implements RichHost<Paragraph> {
   deleteAcross(s: Pos, e: Pos): Pos | null {
     const a = path(s.pa)
     const b = path(e.pa)
+    // 同一表格内跨格选区：Word 的 Delete 清掉每格文字、保留表格与段落结构。
+    // 旧实现只认顶层地址（span/deleteAcross 都拒单元格地址）→ 跨格 Delete 静默无操作。
+    if (a.length >= 4 && b.length >= 4 && a[0] === b[0]) {
+      const r = this.cellRange({ a: s, f: e })
+      if (!r || r.cells < 2) return null
+      const at: Pos = { pa: `${r.bi}.${a[1]}.${a[2]}.0`, o: 0 }
+      this.replaceBlocks(r.bi, 1, [{ ...clearCellsText(r.t, r.rect), tid: r.t.tid ?? this.nextPid++ }], { a: at, f: at })
+      return at
+    }
     if (a.length !== 1 || b.length !== 1 || a[0] >= b[0]) return null
     const first = this.para(s.pa)
     const last = this.para(e.pa)
@@ -567,109 +476,30 @@ export class DocxEditor implements RichHost<Paragraph> {
   }
 
   // ---------------------------------------------------------------- comments
-
-  private paraPos(p: Pos): ParaPos | null {
-    const para = this.para(p.pa)
-    if (!para || para.pid === undefined) return null
-    const k = this.locate(para.pid).findIndex((l) => l.pa === p.pa)
-    return k < 0 ? null : { pid: para.pid, k, o: p.o }
-  }
+  // 范围换算与文本摘录在 comments.ts（宿主面 = CommentHost：blocks / para / withRuns / replace / locate）
 
   /** the block address and offset of `d` now; null when its paragraph is gone */
   posOf(d: ParaPos): Pos | null {
-    const locs = this.locate(d.pid)
-    const l = locs[Math.min(d.k, locs.length - 1)]
-    const p = l && this.para(l.pa)
-    return p ? { pa: l.pa, o: Math.min(d.o, plen(p.runs as RRun[])) } : null
+    return posOfOf(this, d)
   }
 
   /** what a new comment covers: the selection, or the word at the caret; null when there is no text there */
   commentRange(sel: Sel | null = this.input.sel() ?? this.input.lastSel): CommentRange | null {
-    if (!sel) return null
-    const r = this.selectedParas(sel)
-    if (!r) return null
-    let { s, e } = r
-    if (collapsed(sel)) {
-      const t = runsText(this.para(s.pa)!.runs as RRun[])
-      let a = s.o
-      let b = s.o
-      while (a > 0 && WORD.test(t[a - 1])) a--
-      while (b < t.length && WORD.test(t[b])) b++
-      if (a === b) return null
-      s = { pa: s.pa, o: a }
-      e = { pa: s.pa, o: b }
-    }
-    let quote = ''
-    r.pas.forEach((pa, i) => {
-      const t = runsText(this.para(pa)!.runs as RRun[])
-      quote += (i ? ' ' : '') + t.slice(pa === s.pa ? s.o : 0, pa === e.pa ? e.o : t.length)
-    })
-    quote = quote.replace(/\uFFFC/g, '').replace(/\s+/g, ' ').trim()
-    const a = this.paraPos(s)
-    const f = this.paraPos(e)
-    if (!a || !f || !quote) return null
-    return { a, f, quote: quote.length > QUOTE_MAX ? quote.slice(0, QUOTE_MAX - 1) + '…' : quote }
+    return rangeOf(this, sel)
   }
 
   /** marks `range` as covered by comment thread `id` (one undo step); false when its text is gone */
   markComment(id: string, range: CommentRange): boolean {
-    const s = this.posOf(range.a)
-    const e = this.posOf(range.f)
-    if (!s || !e) return false
-    const sel = { a: s, f: e }
-    const r = this.selectedParas(sel)
-    if (!r) return false
-    let any = false
-    const next = r.pas.map((pa) => {
-      const p = this.para(pa)!
-      const a = pa === r.s.pa ? r.s.o : 0
-      const b = pa === r.e.pa ? r.e.o : plen(p.runs as RRun[])
-      if (b > a) any = true
-      return this.withRuns(p, markRange(p.runs as RRun[], a, b, id, true))
-    })
-    if (!any) return false
-    this.replace(r.pas, next, { a: r.e, f: r.e }, { label: 'comment' })
-    return true
+    return markOf(this, id, range)
   }
 
   /** the first place of each comment thread the document marks, in document order */
   commentPlaces(): Map<string, CommentPlace> {
-    const out = new Map<string, CommentPlace>()
-    const quotes = new Map<string, string>()
-    const add = (id: string, text: string) => {
-      const q = quotes.get(id)
-      if (q !== undefined && q.length >= QUOTE_MAX) return
-      quotes.set(id, q === undefined ? text : q + text)
-    }
-    const para = (p: Paragraph, pa: string) => {
-      let o = 0
-      const seen = new Set<string>()
-      for (const r of p.runs) {
-        if (r.t === 'box') for (const b of r.blocks) if (b.t === 'p') para(b, pa)
-        if ((r.t === 'text' || r.t === 'img') && r.cm) {
-          for (const id of r.cm) {
-            if (!out.has(id)) out.set(id, { pa, o, quote: '' })
-            // paragraphs are joined by a space
-            if (!seen.has(id) && quotes.has(id)) add(id, ' ')
-            seen.add(id)
-            if (r.t === 'text') add(id, r.text)
-          }
-        }
-        o += r.t === 'text' ? r.text.length : 1
-      }
-    }
-    this.st.blocks.forEach((b, bi) => {
-      if (b.t === 'p') para(b, String(bi))
-      else if (b.t === 'tbl') b.rows.forEach((r, ri) => r.cells.forEach((c, ci) => c.blocks.forEach((x, pi) => x.t === 'p' && para(x, `${bi}.${ri}.${ci}.${pi}`))))
-    })
-    for (const [id, place] of out) {
-      const q = (quotes.get(id) ?? '').replace(/\s+/g, ' ').trim()
-      place.quote = q.length > QUOTE_MAX ? q.slice(0, QUOTE_MAX - 1) + '…' : q
-    }
-    return out
+    return placesOf(this)
   }
 
-  private locate(pid: number): { list: Block[]; index: number; pa: string }[] {
+  /** pid → the addresses holding it now (page-break parts, cell paragraphs), document order */
+  locate(pid: number): { list: Block[]; index: number; pa: string }[] {
     const out: { list: Block[]; index: number; pa: string }[] = []
     this.st.blocks.forEach((b, bi) => {
       if (b.t === 'p' && b.pid === pid) out.push({ list: this.st.blocks, index: bi, pa: String(bi) })
@@ -850,7 +680,8 @@ export class DocxEditor implements RichHost<Paragraph> {
     this.pend = null
   }
 
-  private selectedParas(sel: Sel): { pas: string[]; s: { pa: string; o: number }; e: { pa: string; o: number } } | null {
+  /** CommentHost 面：选区覆盖的连续段落（跨容器时 null） */
+  selectedParas(sel: Sel): { pas: string[]; s: { pa: string; o: number }; e: { pa: string; o: number } } | null {
     const [s, e] = ordered(this, sel)
     const pas = s.pa === e.pa ? (this.para(s.pa) ? [s.pa] : null) : this.span(s.pa, e.pa)
     return pas ? { pas, s, e } : null
@@ -902,8 +733,14 @@ export class DocxEditor implements RichHost<Paragraph> {
     this.format({ hl: c ?? undefined, shd: undefined }, { hl: c })
   }
 
+  /** 清除字符格式：s（渲染）与 d（写回）清同一组键。d 全部用 null —— applyRunSet 见 null 删元素，
+      直接格式整层剥掉、回到样式继承值，与 Word「清除格式」同义（旧版只关 b/i/u/strike，漏掉 sz/font）。 */
   clearFormat() {
-    this.format({ b: false, i: false, u: 'none', strike: false, hl: undefined }, { b: false, i: false, u: 'none', strike: false, color: null, hl: null, va: null }, { want: true })
+    this.format(
+      { b: undefined, i: undefined, u: undefined, strike: undefined, color: undefined, sz: undefined, font: undefined, hl: undefined, va: undefined, shd: undefined },
+      { b: null, i: null, u: null, strike: null, color: null, sz: null, font: null, hl: null, va: null },
+      { want: true },
+    )
   }
 
   /** the mark a tracked change is signed with (undefined when the tracking is off) */
@@ -966,8 +803,27 @@ export class DocxEditor implements RichHost<Paragraph> {
   }
 
   backspaceAtStart(pa: string, p: Paragraph): boolean {
-    if (!p.lst) return false
-    this.setPara({ list: 'none' }, {}, { a: { pa, o: 0 }, f: { pa, o: 0 } })
+    if (p.lst) {
+      this.setPara({ list: 'none' }, {}, { a: { pa, o: 0 }, f: { pa, o: 0 } })
+      return true
+    }
+    if (!pa.includes('.')) return false
+    // 单元格首段起点：prev() 跨不出单元格（地址失效即静默失败）。按 Word 语义把光标移到上一格的末段末尾。
+    const [bi, ri, ci, pi] = path(pa)
+    if (pi > 0) return false
+    const t = this.st.blocks[bi]
+    if (t?.t !== 'tbl') return false
+    const pr = ci > 0 ? ri : ri - 1
+    const pc = ci > 0 ? ci - 1 : (t.rows[pr]?.cells.length ?? 0) - 1
+    const cell = t.rows[pr]?.cells[pc]
+    const pk = cell ? cell.blocks.map((b) => b.t).lastIndexOf('p') : -1
+    if (!cell || pk < 0) return false
+    const q = `${bi}.${pr}.${pc}.${pk}`
+    const len = plen(this.para(q)?.runs as RRun[] ?? [])
+    const sel = { a: { pa: q, o: len }, f: { pa: q, o: len } }
+    this.input.restore(sel)
+    this.input.lastSel = sel
+    this.emitState(sel)
     return true
   }
 
@@ -1052,11 +908,14 @@ export class DocxEditor implements RichHost<Paragraph> {
     }
   }
 
+  /** 返回提示串 = 因缺少上下文而没做任何事（工具条 flash 给用户） */
   insertTable(rowsN: number, colsN: number) {
     const sel = this.cmdSel()
-    const bi = sel ? Number(sel.f.pa.split('.')[0]) : -1
+    if (!sel) return '请将光标置于正文段落'
+    const bi = Number(sel.f.pa.split('.')[0])
     const p = this.st.blocks[bi]
-    if (!sel || sel.f.pa.includes('.') || p?.t !== 'p' || p.pid === undefined) return
+    if (sel.f.pa.includes('.')) return '请在表格外插入表格'
+    if (p?.t !== 'p' || p.pid === undefined) return '请将光标置于正文段落'
     // 宽预算 = 可用宽 + nAdd（Document.js:20094：mode≤Word14 → 10.8pt，否则 0）
     const t: Table = { ...newTable(rowsN, colsN, this.contentW + newTableNAddPt(this.compatMode), () => this.emptyPara(p)), tid: this.nextPid++ }
     const after: Block[] = [p, t]
@@ -1065,13 +924,13 @@ export class DocxEditor implements RichHost<Paragraph> {
     this.replaceBlocks(bi, 1, after, { a: { pa: `${bi + 1}.0.0.0`, o: 0 }, f: { pa: `${bi + 1}.0.0.0`, o: 0 } })
   }
 
-  /** Structural table edit at the caret's cell. */
+  /** Structural table edit at the caret's cell; a hint string when the caret is not in a table. */
   tableOp(kind: 'rowAbove' | 'rowBelow' | 'colLeft' | 'colRight' | 'delRow' | 'delCol' | 'delTable') {
     const sel = this.tableCmdSel()
-    if (!sel || !sel.f.pa.includes('.')) return
+    if (!sel || !sel.f.pa.includes('.')) return '请将光标置于表格内'
     const [bi, ri, ci] = sel.f.pa.split('.').map(Number)
     const t = this.st.blocks[bi] as Table
-    if (t?.t !== 'tbl') return
+    if (t?.t !== 'tbl') return '请将光标置于表格内'
     const g = gridOf(t).cells.find((c) => c.ri === ri && c.ci === ci)?.g ?? 0
     const mk = (tpl: { blocks: Block[] }) => {
       const p = tpl.blocks.find((b): b is Paragraph => b.t === 'p') ?? (this.st.blocks.find((b) => b.t === 'p' && b.pid !== undefined) as Paragraph)
@@ -1135,28 +994,29 @@ export class DocxEditor implements RichHost<Paragraph> {
     this.replaceBlocks(bi, 1, [{ ...next, tid: t.tid ?? this.nextPid++ }], { a: { pa: caret, o: 0 }, f: { pa: caret, o: 0 } })
   }
 
-  /** Merges the selected cells, or splits the merged cell at the caret. */
-  mergeCells(): boolean {
+  /** Merges the selected cells, or splits the merged cell at the caret; a hint string when there is nothing to merge. */
+  mergeCells(): boolean | string {
     const r = this.cellRange()
-    if (!r) return false
+    if (!r) return '请选中两个以上单元格'
+    if (r.cells < 2) return '请选中两个以上单元格'
     const next = mergeCells(r.t, r.rect)
-    if (!next) return false
+    if (!next) return '无法合并所选单元格'
     this.putTable(r.bi, r.t, next, r.rect.r0, r.rect.g0)
     return true
   }
 
-  unmergeCell(): boolean {
+  unmergeCell(): boolean | string {
     const sel = this.tableCmdSel()
-    if (!sel || !sel.f.pa.includes('.')) return false
+    if (!sel || !sel.f.pa.includes('.')) return '请将光标置于合并单元格内'
     const [bi, ri, ci] = path(sel.f.pa)
     const t = this.st.blocks[bi]
-    if (t?.t !== 'tbl') return false
+    if (t?.t !== 'tbl') return '请将光标置于合并单元格内'
     const g = gridOf(t).cells.find((c) => c.ri === ri && c.ci === ci)?.g ?? 0
     const next = unmergeCell(t, ri, ci, (tpl) => {
       const p = tpl.blocks.find((b): b is Paragraph => b.t === 'p') ?? (this.st.blocks.find((b) => b.t === 'p' && b.pid !== undefined) as Paragraph)
       return { ...this.emptyPara(p), pd: {}, ps: p.ps, sid: p.sid }
     })
-    if (!next) return false
+    if (!next) return '当前单元格未合并'
     this.putTable(bi, t, next, ri, g)
     return true
   }
@@ -1164,24 +1024,28 @@ export class DocxEditor implements RichHost<Paragraph> {
   /** Borders of the selected cells; `css` is the line drawn ('0.5pt solid #000000'). */
   setCellBorders(preset: BorderPreset, css = '0.5pt solid #000000') {
     const r = this.cellRange()
-    if (r) this.putTable(r.bi, r.t, setBorders(r.t, r.rect, preset, css), r.rect.r0, r.rect.g0)
+    if (!r) return '请将光标置于表格内'
+    this.putTable(r.bi, r.t, setBorders(r.t, r.rect, preset, css), r.rect.r0, r.rect.g0)
   }
 
   /** Fill of the selected cells (null: no fill). */
   setCellShade(color: string | null) {
     const r = this.cellRange()
-    if (r) this.putTable(r.bi, r.t, patchCells(r.t, r.rect, (c) => ({ ...c, shd: color ?? undefined, set: { ...c.set, shd: true } })), r.rect.r0, r.rect.g0)
+    if (!r) return '请将光标置于表格内'
+    this.putTable(r.bi, r.t, patchCells(r.t, r.rect, (c) => ({ ...c, shd: color ?? undefined, set: { ...c.set, shd: true } })), r.rect.r0, r.rect.g0)
   }
 
   setCellVAlign(v: 'top' | 'middle' | 'bottom') {
     const r = this.cellRange()
-    if (r) this.putTable(r.bi, r.t, patchCells(r.t, r.rect, (c) => ({ ...c, vAlign: v === 'top' ? undefined : v, set: { ...c.set, vAlign: true } })), r.rect.r0, r.rect.g0)
+    if (!r) return '请将光标置于表格内'
+    this.putTable(r.bi, r.t, patchCells(r.t, r.rect, (c) => ({ ...c, vAlign: v === 'top' ? undefined : v, set: { ...c.set, vAlign: true } })), r.rect.r0, r.rect.g0)
   }
 
   /** Makes the selected columns (one cell selected: every column) the same width. */
   distributeColumns() {
     const r = this.cellRange()
-    if (r) this.putTable(r.bi, r.t, distributeCols(r.t, r.cells > 1 ? r.rect : undefined), r.rect.r0, r.rect.g0)
+    if (!r) return '请将光标置于表格内'
+    this.putTable(r.bi, r.t, distributeCols(r.t, r.cells > 1 ? r.rect : undefined), r.rect.r0, r.rect.g0)
   }
 
   /** Column widths of a table (pt), e.g. after dragging a column edge. */
@@ -1207,7 +1071,7 @@ export class DocxEditor implements RichHost<Paragraph> {
 
   async insertImages(files: Blob[], at?: Sel) {
     const sel = at ?? this.cmdSel()
-    if (!sel) return
+    if (!sel) return '请先将光标置于正文'
     const runs: Inline[] = []
     for (const f of files) {
       const ext = (f.type.split('/')[1] ?? 'png').replace('svg+xml', 'svg').replace('jpeg', 'jpg')
@@ -1221,7 +1085,7 @@ export class DocxEditor implements RichHost<Paragraph> {
 
   async setLink(url: string | null) {
     const sel = this.input.sel()
-    if (!sel) return
+    if (!sel) return '请先选中要设为超链接的文字'
     if (!url) {
       this.patchRuns(sel, (r) => ({ ...r, href: undefined, lk: undefined }))
       return
@@ -1253,9 +1117,10 @@ export class DocxEditor implements RichHost<Paragraph> {
 
   insertPageBreak() {
     const sel = this.input.sel()
-    if (!sel) return
+    if (!sel) return '请先将光标置于正文'
     const p = this.para(sel.f.pa)
-    if (!p || sel.f.pa.includes('.')) return
+    if (!p) return '请先将光标置于正文'
+    if (sel.f.pa.includes('.')) return '请在表格外插入分页符'
     const [l, r] = splitRuns(p.runs as RRun[], sel.f.o)
     const [a, b] = this.split(p, l, r, false)
     const b2 = applyParaPatch({ ...b, pb: true }, { pageBreak: true }, {}, this.mark())
@@ -1264,8 +1129,8 @@ export class DocxEditor implements RichHost<Paragraph> {
 
   /** scales the selected image (factor) or fits it to the page width */
   resizeImage(f: number | 'fit') {
-    const sel = this.input.sel()
-    if (!sel) return
+    const sel = this.imageSel()
+    if (!sel) return '请先选中图片'
     const [s] = ordered(this, sel)
     this.patchObjects(sel, (x) => {
       if (x.t !== 'img') return x
@@ -1416,10 +1281,12 @@ export class DocxEditor implements RichHost<Paragraph> {
   author: () => string = () => 'Me'
   onTracking?: (on: boolean) => void
 
-  setTracking(on: boolean) {
+  /** flips the flag and persists it (settings.xml w:trackChanges via docx.hf); quiet = load-time read-back */
+  setTracking(on: boolean, quiet = false) {
     this.tracking = on
     this.onTracking?.(on)
     this.emitState(this.input.sel())
+    if (!quiet) void this.setHeaderFooter({ trackChanges: on })
   }
 
   /** every editable paragraph, top level and in table cells, with its address */
@@ -1523,21 +1390,21 @@ export class DocxEditor implements RichHost<Paragraph> {
   // ---------------------------------------------------------------- headers / footers
 
   /** the headers / footers changed (here or by a collaborator) */
-  onHF?: (r: { headers: HeaderFooters; titlePg: boolean; evenAndOddHeaders?: boolean }) => void
+  onHF?: (r: { headers: HeaderFooters; titlePg: boolean; evenAndOddHeaders?: boolean; trackChanges?: boolean }) => void
   /** headers / footers as last changed in this session (undefined: as in the file) */
-  hfNow?: { headers: HeaderFooters; titlePg: boolean; evenAndOddHeaders?: boolean }
+  hfNow?: { headers: HeaderFooters; titlePg: boolean; evenAndOddHeaders?: boolean; trackChanges?: boolean }
 
   hfed(res: HFSetResult) {
     if (this.taken.has(res)) return
     this.taken.add(res)
-    this.hfNow = { headers: res.headers, titlePg: res.titlePg, evenAndOddHeaders: res.evenAndOddHeaders }
+    this.hfNow = { headers: res.headers, titlePg: res.titlePg, evenAndOddHeaders: res.evenAndOddHeaders, trackChanges: res.trackChanges }
     this.onHF?.(this.hfNow)
     this.onDirty?.()
   }
 
   /** Changes the headers / footers (text, page numbers, different first page); undoable. */
   async setHeaderFooter(set: HFSet): Promise<HFSetResult | undefined> {
-    if (!set.parts && !set.raw && set.titlePg === undefined && set.evenAndOddHeaders === undefined) return
+    if (!set.parts && !set.raw && set.titlePg === undefined && set.evenAndOddHeaders === undefined && set.trackChanges === undefined) return
     const res = await this.client.call('docx.hf', set)
     if (!res) return
     this.hfed(res)
@@ -1777,7 +1644,8 @@ export class DocxEditor implements RichHost<Paragraph> {
     this.onSelection(sel)
   }
 
-  private imageSel(): Sel | null {
+  /** the selected inline image (ribbon focus-steal falls back to the pointerdown snapshot); null when none */
+  imageSel(): Sel | null {
     const sel = this.cmdSel()
     const img = sel && this.state(sel)?.img
     return img ? { a: { pa: img.pa, o: img.o }, f: { pa: img.pa, o: img.o + 1 } } : null
@@ -1825,12 +1693,13 @@ export class DocxEditor implements RichHost<Paragraph> {
   }
 
   setAltText(alt: string) {
+    if (!this.imageSel()) return '请先选中图片'
     this.patchImage((x) => ({ ...x, alt: alt || undefined, altSet: true }))
   }
 
   async replaceImage(file: Blob) {
     const sel = this.imageSel()
-    if (!sel) return
+    if (!sel) return '请先选中图片'
     const ext = (file.type.split('/')[1] ?? 'png').replace('svg+xml', 'svg').replace('jpeg', 'jpg')
     const { rid, path } = await this.client.call('docx.image', await file.arrayBuffer(), ext)
     const dims = await imageSize(file)
@@ -1845,7 +1714,8 @@ export class DocxEditor implements RichHost<Paragraph> {
   /** deletes the selection (or the selected object) */
   deleteSelection() {
     const sel = this.input.sel()
-    if (sel && !collapsed(sel)) opInsert(this, sel, '')
+    if (!sel || collapsed(sel)) return '请先选中要删除的内容'
+    opInsert(this, sel, '')
   }
 
   insertText(text: string) {
@@ -1855,43 +1725,33 @@ export class DocxEditor implements RichHost<Paragraph> {
 
   // ---------------------------------------------------------------- paint format
 
-  /** copies the caret's character formatting; the next selection receives it */
+  /** copies the caret's character + paragraph formatting; the next selection receives it */
   copyFormat() {
     if (this.painter) {
       this.painter = null
+      this.painterPara = null
       this.onPainter?.(false)
       return
     }
     const st = this.state()
     if (!st) return
-    this.painter = {
-      b: st.b,
-      i: st.i,
-      u: st.u ? 'single' : 'none',
-      strike: st.strike,
-      color: st.color ?? null,
-      hl: st.hl ?? null,
-      va: st.va ?? null,
-      sz: st.sz,
-      font: st.font ? (/^\s*"?([^",]+)/.exec(st.font)?.[1] ?? st.font) : undefined,
-    } as RunSet
+    this.painter = formatFromState(st)
+    this.painterPara = paraFromState(st)
     this.onPainter?.(true)
   }
 
   /** applies the copied formatting to the current selection (after the mouse is released) */
   applyPainter(): boolean {
     const set = this.painter
+    const para = this.painterPara
     const sel = this.input.readSel()
     if (!set || !sel || collapsed(sel)) return false
     this.painter = null
+    this.painterPara = null
     this.onPainter?.(false)
-    const s: Partial<RunStyle> = {}
-    for (const [k, v] of Object.entries(set)) {
-      if (k === 'font') (s as Record<string, unknown>).font = v ? cssFont(v as string) : undefined
-      else if (k === 'u') (s as Record<string, unknown>).u = v
-      else (s as Record<string, unknown>)[k] = v === null ? undefined : v
-    }
-    this.format(s, set)
+    this.format(formatPainterPatch(set), set)
+    // Word 的格式刷连段落格式一起刷：命中段落在字符格式落地后再收段落增量
+    if (para) this.setPara(para, {}, sel)
     return true
   }
 
@@ -1932,6 +1792,7 @@ export class DocxEditor implements RichHost<Paragraph> {
       sz: rs.sz ?? p.markSz ?? this.defaultSz,
       font: rs.font ?? p.markFont ?? this.defaultFont,
       align: p.ps.align ?? 'left',
+      indL: p.ps.indL,
       style: p.sid,
       lst: p.lst,
       canUndo: this.canUndo,

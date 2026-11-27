@@ -27,10 +27,83 @@ struct PendingOpen(Mutex<Vec<String>>);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(PendingOpen(Mutex::new(Vec::new())))
+        .manage(PendingOpen(Mutex::new(Vec::new())));
+
+    // macOS 默认菜单的 Edit 子菜单含预定义 Undo/Redo：muda 给它们注册原生加速键
+    // ⌘Z / ⇧⌘Z / ⌘Y（muda predefined.rs:306）。AppKit 在 performKeyEquivalent: 阶段
+    // 先于 WKWebView 派发 JS keydown 截获按键，路由到 NSUndoManager——而本项目三视图
+    // 全用自维护 history（XlsxEditor.undoStack / DocxEditor.history / undoShapes），
+    // NSUndoManager 一无所知 → 跨 Word/Excel/PPT 一致的撤销失效。
+    // 修复：挂自定义菜单，Edit 子菜单只保留 Cut/Copy/Paste/SelectAll 预定义项
+    // （原生 selector 对 contenteditable 有效），撤销/重做由 JS 层键盘处理消费。
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::menu::{Menu, PredefinedMenuItem, Submenu};
+        builder = builder.menu(|handle| {
+            let pkg = handle.package_info().name.clone();
+            let app_sub = Submenu::with_items(
+                handle,
+                pkg,
+                true,
+                &[
+                    &PredefinedMenuItem::about(handle, None, None)?,
+                    &PredefinedMenuItem::separator(handle)?,
+                    &PredefinedMenuItem::services(handle, None)?,
+                    &PredefinedMenuItem::separator(handle)?,
+                    &PredefinedMenuItem::hide(handle, None)?,
+                    &PredefinedMenuItem::hide_others(handle, None)?,
+                    &PredefinedMenuItem::separator(handle)?,
+                    &PredefinedMenuItem::quit(handle, None)?,
+                ],
+            )?;
+            // Edit：默认项减去 Undo/Redo（其余 Cut/Copy/Paste/SelectAll 原样保留——
+            // 原生 selector 对 WKWebView 输入框/选区有效，且与升级前行为一致）
+            let edit_sub = Submenu::with_items(
+                handle,
+                "Edit",
+                true,
+                &[
+                    &PredefinedMenuItem::cut(handle, None)?,
+                    &PredefinedMenuItem::copy(handle, None)?,
+                    &PredefinedMenuItem::paste(handle, None)?,
+                    &PredefinedMenuItem::select_all(handle, None)?,
+                ],
+            )?;
+            let file_sub = Submenu::with_items(
+                handle,
+                "File",
+                true,
+                &[&PredefinedMenuItem::close_window(handle, None)?],
+            )?;
+            let view_sub = Submenu::with_items(
+                handle,
+                "View",
+                true,
+                &[&PredefinedMenuItem::fullscreen(handle, None)?],
+            )?;
+            // Window/Help 沿用默认 id（tao 按 id 识别系统窗口菜单）
+            let window_sub = Submenu::with_id_and_items(
+                handle,
+                tauri::menu::WINDOW_SUBMENU_ID,
+                "Window",
+                true,
+                &[
+                    &PredefinedMenuItem::minimize(handle, None)?,
+                    &PredefinedMenuItem::maximize(handle, None)?,
+                    &PredefinedMenuItem::separator(handle)?,
+                    &PredefinedMenuItem::close_window(handle, None)?,
+                ],
+            )?;
+            let help_sub =
+                Submenu::with_id_and_items(handle, tauri::menu::HELP_SUBMENU_ID, "Help", true, &[])?;
+            Menu::with_items(handle, &[&app_sub, &file_sub, &edit_sub, &view_sub, &window_sub, &help_sub])
+        });
+    }
+
+    builder
         .invoke_handler(tauri::generate_handler![
             scan_directory,
             index_root,

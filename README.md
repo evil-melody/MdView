@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white" alt="Vue 3">
   <img src="https://img.shields.io/badge/Rust-stable-DEA584?logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/Office-内核内置-7C5CFF" alt="Office 内核内置">
-  <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
+  <img src="https://img.shields.io/badge/license-AGPL--3.0-green" alt="AGPL-3.0 License">
 </p>
 
 **一个窗口管完本地资料库**：扫描目录、分类检索、多页签打开，Markdown / Word / Excel / PPT / PDF / 图片直接预览与编辑，保存写回原文件。文件内容不上传；链接导入与可选的 AI 能力才走网络。
@@ -21,157 +21,117 @@
 | 你想做的事 | MdView 怎么做 |
 |---|---|
 | 打开一堆本地文件 | 多资料库目录递归索引、13 类分类导航、最近更新、文件名与内容搜索 |
-| 写 Markdown | 预览 / 编辑 / 脑图三模式，mermaid、markmap、粘贴截图、查找替换、大纲跳转 |
-| 改 Word / Excel / PPT | `docx / xlsx / pptx` 统一走项目内置 Office 内核（Vue 视图 + Worker 流式解析），三格式可编辑并配 Ribbon 工具栏，导出字节直接覆盖原路径 |
-| 改 PDF | 非扫描件可点选改文字、粘贴 / 复制 / 提取图片；新字沿用文档自带字体、原墨色与原基线，只重绘改动字符；保存直接覆盖原 PDF，扫描件只读 |
+| 写 Markdown | 预览 / 编辑 / 脑图三模式，mermaid、markmap、KaTeX 公式、粘贴截图、查找替换、大纲跳转 |
+| 改 Word / Excel / PPT | `docx / xlsx / pptx` 统一走内置 Office 内核（Vue 视图 + Worker 流式解析），三格式可编辑并配 Ribbon 工具栏，导出字节直接覆盖原路径 |
+| 改 PDF | 非扫描件可点选改文字、粘贴 / 复制 / 提取图片；新字沿用文档自带字体、原墨色与原基线，只重绘改动字符；保存直接覆盖原 PDF |
 | 看图片 / 音视频 | 内嵌预览，图片滚轮缩放与拖拽平移 |
-| 长行看着累 | 内容区右键「内容自动换行」开关，CodeMirror / 文本 / 代码预览 / Markdown / Word / PPT / 表格 / PDF 输入框统一生效，偏好本地持久化 |
-| 改 HTML | 原生 iframe 预览 + CodeMirror 编辑，压缩源码自动排版 |
 | 换个格式 | 以 Markdown 为枢纽的转格式矩阵，PDF 走前端所见即所得导出 |
 | 找重复图片 | Rust 端 dHash 感知哈希本地归组，不依赖 AI |
 | 让 AI 帮忙 | 可选 OpenAI 兼容接口：流式摘要 / 打标 / 解读、批量摘要缓存 |
-| 打开超大 SQL / 日志 | 超过 5 MB 不再报「文件过大」：Rust 按 512 KB 字节区间读、前端跨块拼 UTF-8，CodeMirror 分片追加流式只读预览，带进度条 |
-| 反复切大文件页签 | 每个页签常驻一个引擎实例；大纲 / Markdown 渲染结果按页签缓存，隐藏态不触发分页重测量，保存后指纹基线同步，往返切换只切显示 |
+| 打开超大 SQL / 日志 | 超过 5 MB 流式只读预览：按 512 KB 字节区间读、跨块拼 UTF-8、分片追加，带进度条 |
+| 反复切大文件页签 | 每个页签常驻一个引擎实例，切换只切显示：不重读盘、不重解析、不重排 |
 
 ## 这是什么
 
-MdView 是 Tauri 2 桌面应用：Vue 3 前端负责界面与编辑器，Rust 后端负责文件扫描、索引、Office→Markdown 枢纽、图片指纹、AI 流式代理与网页导入。所有文件操作在本机完成；配置文件与缓存落在 `config_dir/MdView/`。
+MdView 是 Tauri 2 桌面应用：Vue 3 前端负责界面与编辑器，Rust 后端负责文件扫描、索引、Office→Markdown 枢纽、图片指纹、AI 流式代理、网页导入与进程外引擎桥。所有文件操作在本机完成；配置文件与缓存落在 `config_dir/MdView/`。
 
-Office 与 PDF 的预览 / 编辑不经过 Rust 的 Markdown 枢纽——前端引擎直接读写字节，保存覆盖原路径。Rust 的 `office.rs` 仍服务于批量 AI 摘要、格式转换与搜索内容抽取。
+Office 与 PDF 的预览 / 编辑不经过 Rust 的 Markdown 枢纽——前端内核直接读写字节，保存覆盖原路径。Rust 的 `office.rs` 服务于批量 AI 摘要、格式转换与搜索内容抽取。
 
 ---
 
-## 功能全景
+## 功能模块
 
 ### 资料库与文件管理
 
-- **多资料库目录**：侧栏、首页、资料库弹窗三处添加；移除需二次确认且只注销不删盘；树节点 ✕ 快捷移除
-- **扫描与索引**：单层目录扫描 + 全库递归索引（深度上限 6，跳过 `.` / `node_modules` / `target` / `dist` / `vendor`）；隐藏文件与内部临时产物自动过滤
+- **多资料库目录**：侧栏、首页、资料库弹窗三处添加；移除需二次确认且只注销不删盘
+- **扫描与索引**：单层目录扫描 + 全库递归索引（深度上限 6，跳过 `.` / `node_modules` / `target` / `dist` / `vendor`）；隐藏文件与临时产物自动过滤
 - **分类导航**：Markdown / 文档 / 表格 / 演示 / PDF / 图片 / 文本 / 代码 / 配置 / 压缩包 / 音视频 / 其他，带计数；最近更新取前 200
-- **搜索**：文件名 + 正文 `contains` 扫描（搜索深度上限 12），结果并入 AI 摘要文本命中；侧栏树输入即过滤（220ms 防抖、渲染上限 400）
-- **新建文件**：11 种类型（md / txt / json / yaml / toml / ini / html / sh + Office 三件套 docx / xlsx / pptx），大小写不敏感查重，默认落当前目录，创建后直接进编辑；三件套空白文档由内核 `core/blank.ts` 生成最小 OOXML 包（docx 单节文档 / xlsx 单空表 / pptx 母版+版式+主题全套），落盘即开即编
-- **链接导入文章**：贴入网页链接生成 `.md` 或 `.html`；正文图片本地化到 `<文档名>.assets/`（60 张 / 20MB 上限），附件按白名单与 40 / 100 / 500MB 分级限制，微信视频号链接转为离线可播放块；HTML 模式保留原页面内联样式
-- **另存为**：原生保存弹窗，落盘后页签跟随新文件（Office 文件不提供此按钮）
-- **右键菜单**：打开 / 打开所在目录 / 在 Finder 中显示 / 复制路径 / 转格式… / 删除（二次确认）
-- **打开方式**：Finder 拖入文件、系统文件关联冷启动（md / markdown / mdx / txt / pptx）、首页快捷入口
-- **联动**：右侧增删改、新建、另存为、粘贴截图、转换后左侧树自动重扫并保留展开态；激活页签自动展开目录链并滚动高亮
-- **外部改动同步**：每 3 秒按 `size:mtime` 指纹轮询当前页签；有未保存改动时只打标点不覆盖，手动 / 自动刷新后清标点；侧栏整体刷新 + 页头 ↻ 刷新文档
-- **页签条**：横向滚轮滚动、无原生滚动条、左右淡出提示；脏 / 外部变更标点；右键「关闭 / 关闭其他 / 关闭右侧 / 全部关闭」，批量关闭脏页签一次确认
+- **搜索**：文件名 + 正文 `contains` 扫描（深度上限 12），AI 摘要文本并入命中；侧栏树输入即过滤
+- **新建文件**：11 种类型（md / txt / json / yaml / toml / ini / html / sh + docx / xlsx / pptx）；Office 空白文档由内核 `core/blank.ts` 生成最小 OOXML 包，落盘即开即编
+- **链接导入文章**：网页链接生成 `.md` 或 `.html`；正文图片本地化到 `<文档名>.assets/`，微信视频号链接转为离线可播放块
+- **外部改动同步**：每 3 秒按 `size:mtime` 指纹轮询当前页签；有未保存改动时只打标点不覆盖
+- **页签条**：横向滚轮滚动、脏 / 外部变更标点、右键批量关闭一次确认
+- **打开方式**：Finder 拖入、系统文件关联冷启动、右键菜单（打开所在目录 / 复制路径 / 转格式 / 删除）
 
 ### 预览与编辑
 
 | 格式 | 预览 | 编辑 | 实现 |
 |---|---|---|---|
-| Markdown / 文本 | ✅ | ✅ | marked + DOMPurify；预览态可所见即所得编辑，编辑态左 textarea + 右实时预览、双向滚动同步 |
-| mermaid / markmap | ✅ | — | 流程图随主题重渲染；除 ` ```mermaid ` 外，` ```flowchart TB ` / ` ```graph ` / ` ```sequenceDiagram ` 等标注（含内容开头关键字）也按 mermaid 渲染；脑图一键生成，大纲侧栏点击跳转 |
-| 数学公式（块级 `$…$`） | ✅ | — | KaTeX 渲染 `$$ C = \frac{a}{b} $$` 之类块级公式，独立居中块；源码中的 `$$` 与 mermaid/pre 代码块先做占位保护，不会误伤 |
-| 代码 / 配置 / HTML | ✅ | ✅ | CodeMirror：行号、语法高亮、补全、括号匹配、查找替换、Tab 缩进、字数统计；HTML 另有格式化按钮与压缩源码自动排版 |
-| 超大文本（> 5 MB，含 `.sql`） | ✅ 流式只读 | — | Rust `read_file_range` 按 512 KB 字节区间读原始字节 → `TextDecoder(stream)` 跨块拼 UTF-8 → CodeMirror 分片追加；跳过语法解析、只读、带进度条，不写盘 |
-| Word `docx` | ✅ | ✅ | 内置内核：流式块树 + 分页虚拟渲染；文本、字体、段落、列表、表格均可编辑 |
+| Markdown / 文本 | ✅ | ✅ | marked + DOMPurify；预览态所见即所得编辑，编辑态双栏实时预览、滚动同步 |
+| mermaid / markmap | ✅ | — | 流程图随主题重渲染；`flowchart` / `graph` / `sequenceDiagram` 等标注同样按 mermaid；脑图一键生成、大纲跳转 |
+| 数学公式 | ✅ | — | KaTeX 渲染块级 `$$…$$`，源码 `$$` 与代码块占位保护 |
+| 代码 / 配置 / HTML | ✅ | ✅ | CodeMirror 6：行号、高亮、补全、括号匹配、查找替换、代码折叠（JSON 等大文件按键/数组折叠）；HTML 压缩源码自动排版 |
+| 超大文本（> 5 MB） | ✅ 流式只读 | — | Rust 字节区间读 → `TextDecoder(stream)` 跨块拼 UTF-8 → 分片追加，跳过语法解析 |
+| Word `docx` | ✅ | ✅ | 内置内核：流式块树 + 自算分页虚拟渲染 |
 | Excel `xlsx` | ✅ | ✅ | 内置内核：二维虚拟网格 + 单元格 / 公式 / 格式写入 |
-| PPT `pptx` | ✅ | ✅ | 内置内核：幻灯片按需取页 + 左侧列表 / 幻灯片浏览真实缩略图（复用舞台画布逐页 RPC）+ 文本形状编辑 / 增删页 |
-| `csv / tsv` | ✅ | ✅ | 与 xlsx 同走内置表格引擎（内核以工作簿流式打开），单元格可编辑，保存写回原分隔符文本（不变 xlsx） |
-| PDF | ✅ | ✅ | pdfjs 单页渲染 + 文本层 + pdf-lib 增量写回：文字点选修改（复用原字体 / 墨色 / 基线，只重绘改动字符）、图片粘贴 / 复制 / 提取，保存直接覆盖原文件；扫描件只读 |
-| 图片 | ✅ | — | 滚轮缩放 0.1–10×、拖拽平移、双击复位、适应 / 1:1 |
+| PPT `pptx` | ✅ | ✅ | 内置内核：按需取页 + 左侧真实缩略图 + 形状 / 文本编辑 |
+| `csv / tsv` | ✅ | ✅ | 与 xlsx 同走表格引擎，保存写回原分隔符文本 |
+| PDF | ✅ | ✅ | pdfjs 渲染 + 文本层命中 + pdf-lib 增量写回，覆盖原文件；扫描件只读 |
+| 图片 | ✅ | — | 滚轮缩放 0.1–10×、拖拽平移、双击复位 |
 | 音视频 | ✅ | — | 原生 `<audio>` / `<video>` |
-| 压缩包 | ❌ | — | 暂不支持预览 |
 
-> Markdown 预览中的代码块只输出转义文本，无语法着色；语法高亮由代码 / HTML 文件的 CodeMirror 提供。
+- **粘贴截图**：编辑态 `⌘V` 存为同目录 png 并插入相对路径引用
+- **查找 / 替换**：预览态 DOM 高亮跳转、编辑态选区定位；计数「当前 / 总数」
+- **HTML 预览**：Rust 把本地资源内联为 `data:` URI，同源 iframe 渲染，快捷键转发主窗口
+- **Office 右键菜单**：Word / PPT / 表格各有 Office 风格的上下文菜单（格式、插删行列、剪贴板读写、清除内容），全部自绘控件，随视口边缘夹紧
+- **表格网格**：Excel 式无限行列、冻结窗格真实渲染、名称框跳转；所有输入框走内嵌模态，不依赖 WebView 不支持的 `window.prompt`
 
-- **粘贴截图**：编辑态 `⌘V` 贴入剪贴板图片，存为同目录 `image-<时间戳>.png` 并插入相对路径引用
-- **查找 / 替换**：预览态 DOM 高亮跳转、编辑态文本选区（输入即自动定位首个命中并滚动到视野，上一个 / 下一个 / 替换当前 / 全部、区分大小写）；计数实时显示「当前 / 总数」。内容区右键菜单含「全选（编辑器内）」，Ctrl/⌘+A 焦点在内容区时也只在编辑器内选全，不会选中应用外壳
-- **HTML 预览**：Rust 把本地资源内联为 `data:` URI，前端以 `srcdoc` 同源 iframe 渲染；iframe 内 `Ctrl+S` / `Ctrl+F` 转发到主窗口；保存后强制重载
-- **超大文本流式预览**：文件超过 5 MB 不再拒绝打开。Rust `read_file_range` 用 `Seek` 按字节区间读（单次上限 1 MB），走 Tauri 原始字节通道；前端 `TextDecoder.decode(bytes, { stream: true })` 跨块拼接，被分片切开的 UTF-8 汉字不会变成替换符。每 512 KB 追加一次并让出主线程，CodeMirror 关掉语法解析与编辑能力（`readOnly` + `editable:false`），带加载进度；正文不进页签 `content`，`Ctrl/⌘+S` 明确提示「不写盘」，刷新只自增 `streamRev` 让编辑器从头重读，隐藏另存为 / 转格式 / AI / 查找栏。检出 NUL 字节判定为二进制并停止
-- **PPT 缩略图**：左侧列表与「幻灯片浏览」不再是页码占位。共用 `OfficeSlideCanvas.vue` 渲染形状 / 文本 / 图片，按 `pptx.slide` 逐页 RPC 按需取模型，缓存后按容器宽度缩放；结构变更清空缓存，浏览视图隐藏舞台并放大缩略图网格
-- **Word / PPT 右键菜单**：文档区右键——复制 / 剪切 / 粘贴、加粗 / 倾斜 / 下划线 / 清除格式、新建批注、插入链接（编辑态）；幻灯片舞台右键——新建 / 复制 / 删除 / 隐藏幻灯片、上移 / 下移，选中形状时为「删除形状」。均随视口边缘夹紧
-- **表格右键菜单**：单元格右键弹出 Office 风格上下文菜单——上 / 下插行、左 / 右插列、删除行列、复制 / 粘贴（系统剪贴板 + 进程内副本兜底，跨格复制为 TSV、粘贴按网格还原）、清除内容；行头 / 列头右键有各自的插删与隐藏菜单。操作走内核 `xlsx.sheetOp`，可撤销。菜单靠近视口边缘时自动夹紧；`Ctrl/⌘+Z` 撤销、`Ctrl/⌘+Shift+Z` / `Ctrl+Y` 重做、`Ctrl/⌘+A` 全选（只选表格，不碰应用外壳，Esc 回到单格）；页签栏「＋ 行」在表格末尾追加一行
-- **表格网格**：Excel 式无限行列——数据区外铺空白行 / 列，滚动近边缘自动延伸；行头 / 列头点击选中整行 / 整列（高亮）；冻结窗格真实渲染（冻结行 / 列钉住 + 边界线，`数据` 页签冻结后滚动仍然保持）；查找 / 替换为右上角悬浮条（计数「当前 / 总数」、上一个 / 下一个跳转选中、全部替换），不再依赖 WebView 不支持的 `window.prompt`——所有 Office 输入框（重命名工作表、自定义格式、链接、批注、替代文字等）统一走内嵌模态输入
+### Office 引擎
 
-### Office 三格式引擎
-
-`docx / xlsx / pptx` 共用一条链路。**内核源码已内置在 `src/office/`，视图层全部是 Vue，无运行时依赖、无 React、无外部 npm 包**；MIT 许可与版权声明见 `src/office/LICENSE`。
+`docx / xlsx / pptx` 共用一条链路。**内核源码内置在 `src/office/`，视图层全部是 Vue，无运行时依赖、无 React、无外部 npm Office 包**（MIT 子许可见 `src/office/LICENSE`）。
 
 ```
 readFileBytes → Blob → DocumentClient.open()
-   → Vite inline Worker：懒 ZIP / SAX 流式解析 / 按需 RPC
+   → Vite Worker（真同源 URL，非 inline）：懒 ZIP / SAX 流式解析 / 按需 RPC
    → Vue 视图：分页虚拟渲染（Word）、二维虚拟网格（Excel）、按需取页（PPT）
    → client.call('save') → Uint8Array → writeFileBytes(原路径)
 ```
 
+> Worker 用真 URL 而非 `?worker&inline`：inline 产物是 `data:text/javascript` worker，origin 为 null，字体资源（`fonts.wasm` 与 TTF）在 Worker 内不可达，xlsx 列宽度量直接断链。字体加载在主线程走 script 标签、在 Worker 走 fetch + 垫片，两条路都有探针钉住（x25 主线程 / x26 Worker 通道）。
+
 | 层 | 位置 | 职责 |
 |---|---|---|
-| 内核 | `src/office/core/`（约 50k 行） | ZIP / OPC / OOXML 解析、格式转换、脏块写回、公式与编辑 RPC |
-| 字体内核 | `src/office/core/font/` + `public/fonts/` | ONLYOFFICE 级自算度量：vendored `fonts.wasm`（FreeType+HarfBuzz+libhyphen，3.6MB）的 TS 封装、576pt 归一化测量、贪心断行 + 230 条禁则 + justify 双通道；Carlito（≡Calibri，OFL）四样式随包 |
-| 编辑逻辑 | `src/office/view/`（约 3.8k 行纯 TS） | 富文本输入控制器、段落 / 表格编辑、撤销重做、几何与网格轴 |
-| 视图 | `src/office/components/` | 三套 Vue 组件 + 共用幻灯片画布 `OfficeSlideCanvas.vue` + Ribbon 工具条，样式集中在独立 CSS 文件 |
-| 工具条配置 | `src/office/ribbon.ts` | 声明式 Ribbon：按格式定义选项卡 / 分组 / 按钮，只描述命令名与参数 |
-| 宿主 | `src/components/OfficeEngineHost.vue` | 打开 / 刷新 / 保存，按格式切换视图，向 MdView 暴露 `save()` |
+| 内核 | `src/office/core/`（约 58k 行 TS） | ZIP / OPC / OOXML 解析、脏块写回、公式与编辑 RPC |
+| 字体内核 | `src/office/core/font/` + `public/fonts/` | 自算度量：vendored `fonts.wasm`（FreeType + HarfBuzz + libhyphen，3.6MB）TS 封装、576pt 归一化测量、贪心断行 + 230 条禁则；Carlito（≡Calibri）随包 |
+| 编辑逻辑 | `src/office/view/`（约 6.8k 行纯 TS） | 富文本输入控制器、段落 / 表格编辑、撤销重做、几何轴 |
+| 视图 | `src/office/components/` | 三套 Vue 组件 + 共用幻灯片画布 + Ribbon 工具条 |
+| 工具条配置 | `src/office/ribbon.ts` | 声明式 Ribbon：只描述命令名与参数，视图 `defineExpose` 防腐层执行 |
+| 宿主 | `src/components/OfficeEngineHost.vue` | 打开 / 刷新 / 保存，按格式切换视图 |
 
-- **Ribbon 工具栏**：MdView 顶部页签栏 / 保存 / 转格式 / AI 助手 / 刷新管文件级操作；`OfficeToolbar.vue` 按 `ribbon.ts` 渲染文档内命令，命令经视图 `defineExpose` 防腐层执行，工具条不碰内核。只读页签只保留「视图」选项卡
-  - **Word**：开始 / 插入 / 布局 / 审阅 / 视图 5 个选项卡。字体字号、样式与对齐列表、颜色、表格行列与合并边框、图片链接、页眉页脚 / 页码 / 首页不同、纸张页边距分栏、修订与批注、缩放与阅读模式。交互还原：文本选区格式 / 格式刷 / Ctrl+B·I·U·Z、拖放插入、表格列边界拖动改列宽（写回 `docx.table`）、点图片出 8 手柄缩放（角等比 / 边单轴，写回 `docx.edit`）、文档区右键菜单
-  - **Excel**：开始 / 插入 / 公式 / 数据 / 工作表 / 视图 6 个选项卡。20 种数字格式、边框线型、合并旋转、行列显隐与行高列宽、排序填充、冻结窗格、134 个公式函数目录、公式重算、分类汇总 / 数据透视表 / 自动筛选、工作表增删 / 重命名 / 移动 / 切换、网格线与缩放。选区按 Excel 操作还原：鼠标拖选、Shift 扩展、Ctrl/⌘ 加选多区、行列头拖选、选区外框四边拖动搬移内容、右下角填充柄向下/向右填充、名称框显示 `A1:E7` 并支持输入跳转、方向键 / Shift+方向 / Enter / Tab / Delete / F2 / Ctrl+C·V·Z；格式、合并、填充、排序、行高列宽、清除内容等命令对整个选区（含加选区）生效
-  - **Excel 插图（1:1 落文件）**：新增「插入」选项卡——「图片」选文件（超 480×360 等比缩放）、「图表」对选区数据出柱形 / 条形 / 折线 / 饼图（Office 默认配色 SVG → PNG）；`Ctrl/⌘+V` 粘贴剪贴板图片直接落在当前单元格。全部经 `xlsx.image` 写成**真实 OOXML drawing**（`xl/media/` + `xl/drawings/drawingN.xml` twoCellAnchor），保存后用真实 Office 打开呈现同一位置同一尺寸；编辑器内经 `xlsx.drawings` 读回锚点几何（与网格同一套 colPx/rowPx 数学，隐藏行列同步塌缩）、`client.mediaUrl` 渲染 blob 图层，undo/redo、行列宽高变更后图层自动刷新。冒烟 v24 全链路验证：写入 → save → 重新打开 → 几何逐像素一致 → 视图渲染
-  - **PPT**：开始 / 插入 / 视图 3 个选项卡。30 种形状、文本框 / 图片 / 直线、形状层级与填充线条虚线、幻灯片增删复制隐藏与移动、普通 / 浏览 / 放映视图、缩放与适应窗口。交互还原：第一次点击选中形状（文本层不抢焦点）、拖动搬移、选中外框 8 手柄缩放、⌘/Shift 多选、方向键微调（Shift ×10）、Delete 删除、⌘D 复制、⌘A 全选、Escape 取消、多选按外接矩形对齐、就地文本编辑
-  - 分类汇总 / 数据透视表 / 自动筛选在「数据」选项卡为可用按钮：内核无聚合 RPC，走 `xlsx.block` 读全表 → 前端聚合 → `xlsx.set` 写回静态结果，筛选复用 `sheetOp hideRows`；结果是值而非可刷新透视对象，上限 5000 行。自动识别数据边界与分组列 / 数值列（光标停在空白列也不会误指向空列），结果写在数据区紧邻下方或右侧；写入是单次 `xlsx.set`，Ctrl/⌘+Z 一步恢复；无数据或列范围错误只弹可关闭的提示，不再产生常驻的「编辑器异常」横幅。图表编辑与动画内核无能力，未配置按钮、不放假按钮
-- **紧凑布局**：Ribbon 固定约 68px（选项卡 26px + 命令区 41px），命令单行横排、分组名置于底部，不显示原生滚动条；窗口放不下时左右箭头 + 边缘淡出 + 滚轮横向滚动（与顶部页签条一致），下拉 Teleport 到 `body` + fixed 定位，不受工具条裁剪
-- **版式还原**：Word 页面宽高 / 页边距 / 默认字体字号取自 `DocxMeta` 与 `sectPr`，列表制表位 36pt、编号不继承负缩进，分页用可见块 DOM 实测高度逐轮收敛；PPT 画布外层占缩放后尺寸、内层按左上角缩放，隐藏页签恢复时由 `ResizeObserver` 重算
-- **隐藏态不干活**：Word 的 `ResizeObserver` 在 `display:none` 时不把视口高度写成 0，`measure()` 也跳过隐藏根节点，避免每次切回来都重新分页并触发多轮高度收敛
-- **自动换行**：内容区右键菜单切换，偏好存 `mdview-wrap`；CodeMirror 用 `Compartment` 动态重配置，textarea / `<pre>` / Markdown / Word 段落 / PPT 文本 / 表格单元格 / PDF 输入框统一跟随
-- **快捷键归属**：`Ctrl/Cmd+S` 归 MdView；编辑区 `Ctrl/Cmd+F` 不抢占页签与文件树；工具条用 `click` 触发，Word 编辑器在命令前后用 `pendingSel` 保存 / 恢复光标
-- **页签常驻**：每个打开过的 Office / PDF 页签保留一个宿主实例（`v-show` 切换）。切换不销毁 Worker、不重读磁盘、不重新解析；常驻集合内容未变时不赋新引用，`ref` 回调按路径缓存，避免全量 patch
-- **切页签防重活**：大纲按 `content` 引用缓存且 Office 页签直接跳过全量 `marked.parse`；`MdPreview` 按文档缓存解析 + 净化结果，回到同一文档一次注入而非逐帧重放；保存后 `await` 更新指纹基线、轮询在保存期间跳过，杜绝 3 秒后把刚写盘的文件误判为外部变更而重读重解析
-- **刷新语义**：`officeRev` 变化时重读磁盘并重建文档；关闭页签才销毁实例
-- **字节写回**：内核导出编辑后的 OOXML，经 Tauri 原始字节通道覆盖原路径；保存后用新字节重建文档，视图与磁盘一致
-- **大文件**：Worker 解析不阻塞主线程，DOM 只保留可见页 / 可见行列，首屏耗时与文档长度解耦
+**Ribbon 工具栏**：三格式共 16 选项卡 / 59 分组 / 266 个可点项（Excel 193→198：插图组补插入图表、获取数据组补三类刷新、汇总组补大纲级别；另修「清除」误删数据为清筛选、「隐藏批注」假开关接真命令），另有 56 个灰显占位（全部在 Excel，title 注明不支持原因，不放假按钮）。
 
-### Office 工具栏逐按钮审计（2026-11-14）
+- **Word**：开始 / 插入 / 布局 / 审阅 / 视图 5 选项卡——样式与对齐、表格行列合并、页眉页脚 / 页码、纸张页边距分栏、修订与批注、图片环绕与裁剪
+- **Excel**：按桌面版还原 8 选项卡 / 198 项（含插入图表 / 图表·透视·序列刷新 / 大纲级别入口）——选区体系（拖选 / Shift 扩展 / ⌘ 加选 / 行列头 / 外框拖动搬移 / 填充柄四向 / 名称框）、133 函数目录与活公式（`<f>` 落盘、源格改跟随）、Office 式插入函数向导（类别→函数→参数→实时求值→确定写入，非模态可拖网格取参）、分类汇总 / 数据透视 / 自动筛选、条件格式 / 数据验证 / 切片器、原生图表 part、图片真实 OOXML drawing（浮图 twoCellAnchor 等比缩放不缩水、格内图 oneCellAnchor 撑大宿主）
+- **PPT**：开始 / 插入 / 视图 3 选项卡——30 种形状、多选 / 对齐 / 分布 / 旋转 / 框选套选、母版与主题编辑、动画 7 preset（出现 / 强调 / 退出）+ 切换效果、演讲者备注、SmartArt 降级渲染、图表数据编辑（缓存点与 embedded xlsx 双写）
+- **格式覆盖面**：OOXML 三件套及模板、ODF（odt / ods / odp 及 flat 变体）、RTF；`.doc / .xls / .ppt` 旧版二进制由内核解析 CFB 复合文档后转 OOXML 打开，可编可存
+- **写回语义**：编辑导出 OOXML 覆盖原路径；未触碰部件字节恒等透传；保存后用新字节重建文档。图表 / 条件格式 / 透视 / 序列是可刷新对象（`xlsx.chartRefresh` / `pivotRefresh` / `seriesRefresh`）
+- **页签常驻**：每个访问过的 Office / PDF 页签保留一个宿主实例，`v-show` 切换不销毁 Worker、不重读盘；大纲与渲染结果按页签缓存，隐藏态不触发重排
 
-范围：`ribbon.ts` 三格式共 13 选项卡 / 37 分组 / 193 个可点项（145 按钮 + 34 下拉 + 9 色板 + 5 开关），98 个唯一命令。链路：`ribbon.ts` → `OfficeToolbar.vue` → 视图 `defineExpose({ commands })` → `DocumentClient.call` → `worker/engine.ts`。运行时逐 tab 点击 151 个非菜单按钮：`xlsx 62 / docx 62 / pptx 27`、44 个下拉/色板，**0 禁用、0「命令未接入」、0 页面报错**；44 个弹板再逐项点击 581 个选项（含 134 个公式函数 / 70 个特殊符号），581 次命令分发、0 空项、0 报错（2 个「插入图片」项会拉起系统文件选择器，跳过）。
+### Craft 双引擎 sidecar
 
-| 类别 | 数量 | 处置 |
-|---|---|---|
-| 有效（含依赖选区 / 选中形状） | 78 | 保留；形状类未选中时宿主提示「请先选中形状」 |
-| 纯 UI 状态（缩放 / 视图 / 阅读模式 / 查找条 / 格式刷取样） | 17 | 本就不写内核，保留 |
-| 空操作 / 无反馈 | 3 → 0 | 边框色补 `border:'all'`；批注列表弹只读列表；说明文字换成 3 个真按钮 |
-| `B/I/U/S` 二次点击不能取消 | 1 组 → 0 | `format` 翻转布尔标记，内核 `derive` 对 `false` 清除 |
-| `unsupported` 占位 | 1 → 0 | 「说明」组改为「分析」组：分类汇总 / 数据透视表 / 自动筛选 |
+ vendored 两个纯 Rust clean-room 办公引擎于 `src-tauri/vendor/`（MIT OR Apache-2.0）：
 
-本轮一并修复：**冻结首行**滚动后冻结行数据不加载、预渲染行越进冻结区（`loadVisible` 单独取冻结行块 + 冻结时取消向上缓冲）；**Word / PPT 双右键菜单**（视图 `@contextmenu.stop` + 外壳 `pane-body` 对 Office 区域不叠加 `ctx-menu`）。
+- **gridcraft**（Excel 克隆）：514 工作表函数、数据透视、原生图表、条件格式、动态数组；所有用户动作是 JSON 命令
+- **wordcraft**（Word 克隆）：完整排版内核、分页、PDF / PNG 渲染、多格式读写（docx / doc / odt / rtf / pdf…）
 
-### Office 鼠标交互还原与 1:1 差距（2026-11-14 二轮）
-
-| 格式 | 本轮补齐 | 仍非 1:1（内核能力 / 工作量） |
-|---|---|---|
-| Excel | 拖选范围、Shift 扩展、⌘/Ctrl 加选、行列头拖选、外框拖动搬移、填充柄、名称框跳转、方向键 / Delete / F2、格式与合并等命令作用整区；分类汇总自动推断数据边界与字段、结果紧邻数据区、一次 `xlsx.set` 可一步撤销、无数据改可关闭提示；插入图片 / 粘贴剪贴板图片 / 选区数据出图表（柱·条·折·饼），写成真实 OOXML drawing 落文件、重开 1:1 呈现（`xlsx.image` / `xlsx.drawings`）；浮动图片单击选中 + 8 手柄缩放 / 拖动吸附格线 / Delete 删除 / Esc 取消，走 `xlsx.drawingOp` 写回 twoCellAnchor、可撤销、保存重开同位同尺寸；合并单元格渲染（锚格撑满跨行列、命中/选区吸附锚格）；自动筛选 Office 式面板（升序降序 / 文本·数字筛选二级菜单 / 值勾选清单，全部自绘控件）；分类汇总与数据透视 Office 式对话框（字段 / 聚合方式 / 汇总项自绘选择）；原生图表 part（`xl/charts/chartN.xml` + drawing `graphicFrame`，Office 配色 SVG 渲染，源数据改可 `xlsx.chartRefresh` 重算写回）；条件格式（cellIs / containsText / top10 / colorScale / dataBar 5 种 + `styles.xml` 的 dxf，视图叠加底色 / 数据条，不盖选区 overlay）；数据验证（list 下拉 + whole / decimal / date / textLength 校验提示，全部自绘控件）；切片器（真实 `slicerCache` / `slicer` part + `extLst` 挂接，视图字段值按钮组选值即时筛选）；可刷新透视（pivotCache / pivotTable part + 交叉表单元格，源数据改可 `xlsx.pivotRefresh` 重算）；ribbon 新增「条件格式 / 数据验证 / 切片器 / 刷新图表 / 刷新透视」入口；填充柄支持向上 / 左填充（内核 `fill` 四向，按拖拽起点判定方向）；⌘ 加选每区各自绘制外框、跨冻结线选区外框按冻结线拆段；选区外框拖动搬移保留公式与样式（`translateFormula` 随搬移平移 + xf 样式，可撤销）；「序列…」对话框（等差 / 等比 / 日期〔工作日跳周末、月年溢出回退月末〕/ 自动填充 / 步长 / 终止值，全自绘控件、单步撤销）；自动填充选项浮标（复制单元格 / 以序列方式填充 / 仅填充格式 / 不带格式填充）；1904 日期系统校准（`date1904` 分支贯穿 dateToSerial / serialToDate / editor.dateSerial，1900 闰年边界 serial 60 折叠、02-28→59 与 03-01→61 严格互逆，工作日两套 serial%7 基准）；可刷新序列对象（`SeriesFeature` 存私有 sidecar，新增 `xlsx.seriesRefresh` / `xlsx.seriesList`，源格改后刷新重算、单步 undo/redo、rewrite 不丢定义）；ribbon 新增「刷新序列」入口；按用户报障修复：筛选「全选」不还原（内核取消隐藏时回传默认行高 + 视图 unhide 上界改用内核总行数）、Ctrl+A 全选（此前被输入框与筛选面板守卫吞掉）、左上角行列头交叉格点击全选、筛选面板原生 input 换自绘控件；单元格选中态直接敲键盘即进编辑态（替换式预填、IME 组合输入不抢键、多格选区填满整片、提交走 `xlsx.set` 可撤销）；冻结列水平滚动不抖动（流式 progress 增量消息不带 `frozen` 会把冻结列数清零 → 改视图本地 state 同源、`gridPos` 视口坐标与内容坐标分离、冻结区与滚动区不重叠无缝拼接）；**ribbon 按 Excel 桌面版 1:1 还原**（8 tab：开始 / 插入 / 绘图 / 页面布局 / 公式 / 数据 / 审阅 / 视图，共 193 按钮 = A 级 137 真实现 + B 级 56 灰显并 title 说明不支持原因，A 级行为收在 `view/xlsx/ribbon-extra.ts`，覆盖页面设置落 `pageSetup`/`pageMargins`、定义名称、保护工作表、缩进、财务函数、统计等）；按用户报障修复切格丢编辑（根因：切格路径置 `editing=false` 令 `<input>` 在 blur 前卸载 → 提交从未触发；新增 `flushEdit()` 在选区变更 / Shift 扩展 / 换表前同步 `commitEdit`，输入格 19 项断言含重开与 undo）；序列公式化全链路（`core/xlsx/seriesformula.ts` 把第六批纯函数层接入真实写入：等差 `=A1+1` / 等比 `=A1*2` / 日期日 `=A1+1` 保留 numFmt、月年锚定 `EDATE(A1,n)` 避免链式月末回退、fillSeries 写 `=G2+2`，全相对引用落盘 `<f>` + `T_NUM` 缓存值；源格改自动跟随、单步 undo/redo、save→重开一致，对话框与填充柄两路径均接） | 工作日日期序列保留静态值（公式引擎无 WORKDAY）；默认 copyValues 数值填充仍静态（Excel 语义），仅 fillSeries 写公式；sidecar「刷新序列」与公式共存（公式自动跟随、sidecar 保可重建定义）；1904 只冒烟 yyyy-mm-dd numFmt；冻结列钉住为 JS 补偿（`left += scrollLeft`）而非原生 sticky 四面板，快速滚动理论上有 1 帧未补偿中间态；B 级 56 项（Power Query / 3D 模型 / 图标 / 地图 / 迷你图 / 建议图表 / 录制宏等）仅灰显说明、无实现 |
-| Word | 真·查找替换栏（CSS Custom Highlight API 高亮、n/m 命中计数、↑↓ 跳转滚动定位、替换当前 / 全部替换、Esc 关闭）；表格列边界拖动改列宽（`docx.table`）、行下边界拖动改行高（`w:trHeight` 落文件、重开保留）、图片选中 8 手柄缩放（`docx.edit`）、首次点击形状不进文本编辑（PPT 同理）、右键菜单复制 / 剪切改为不破坏选区；图片 4 种环绕（四周 / 紧密 / 衬于文字下 / 浮于文字上）+ 相对页 / 栏 / 段落位置 + 拖动改绝对坐标，真实 `wp:anchor` 落文件、重开一致、视图 float+shape-outside 绕排；长表格按行跨页拆分（续页重复 `tblHeader` 表头行、接同一列宽与边框）；图片旋转手柄（`a:xfrm/@rot` 落盘、选中框与手柄随转、可撤销）；修订持久化基础版（修订开关下键入 → `w:ins`、删除 → `w:del`/`w:delText`，渲染下划线 / 删除线 + 作者色，save→重开保留，接受 / 拒绝与上 / 下条修订可用）；页眉页脚渲染与双击编辑（`header*/footer*` part 自动创建、titlePg 首页变体、PAGE/NUMPAGES 字段按页展开，写回重开一致）；分栏渲染（`w:cols` → CSS columns，块 `break-inside: avoid`）；图片裁剪（`a:srcRect` per-mille 全链路：解析 → 四边中点手柄拖动实时预览 → 写回 → 裁剪壳渲染，可撤销，ribbon 新增「裁剪」入口）；even 奇偶页变体（`w:evenAndOddHeaders` + `headerReference type="even"`，按页号切换 default / first / even，双击偶数页编辑 even part，save→重开一致）；修订 moveFrom / moveTo（剪切+粘贴路径，成对 `w:moveFrom` / `w:moveTo` + 四种 Range 标记，渲染「移动来源 / 移动目标」，accept / reject 成对处理）；分栏栏感知（`view/docx/cols.ts` 纯几何栏索引 + 段落定位校正 + 栏命中高亮）；按用户报障修复布局 tab 无效（根因：视图从未注册 `editor.onPage`，`paged()` 的 `this.onPage?.(res.page)` 为空操作 → `meta.page` 不更新 → 页宽/页高/页边距/栏数全部停在旧值；现接 `onPage` + `onError` 上抛，横向/分栏/页边距真实生效并落盘 `w:pgSz`/`w:pgMar`/`w:cols`，无 sectPr 空文档自建 sectPr）；run 级格式修订 `w:rPrChange`（`view/docx/fmtchange.ts`：`FmtChange` 挂 run 的 `fc`，改格式留痕、旧 rPr 快照写回、accept 丢弃 / reject 成对还原，渲染作者色左竖线 + hover「格式已更改」，id 走 `nextTrackId++`；覆盖空差集撤销、多次改动重算不累加、渲染与写回成对还原三边界）；按用户报障加固表格工具栏与图片链路（`view/docx/selcache.ts` pointerdown 捕获阶段同步快照选区，`view/docx/imagepaste.ts` paste 事件兜底 + preventDefault 防重复插入，兼容 WKWebView 对 paste 的 beforeinput 不带 `dataTransfer.files`；表格 15 按钮逐项可观察效果、剪贴板图片落单元格真实 drawing、save→重开一致）；段落级格式修订 `w:pPrChange`（`view/docx/pprchange.ts` 捕获旧 pPr 快照 + 相对增量，`<w:pPrChange w:id w:author w:date>` 注入为 `w:pPr` 最后子元素，id 走 `nextTrackId++`；setPara/indent/insertPageBreak/pasteRich/restyle 全入口挂钩，accept 丢弃 / reject 成对还原，渲染作者色左边线 + hover「段落格式已更改」；额外把纯格式 label 列入 UNTRACKED 消除伪 del+ins） | 分栏光标仅段落级校正，不保证字符级精确；移动修订仅覆盖剪切+粘贴、限纯文本单段源选区与 collapsed 目标，不含完整拖动搬移路径；段落格式修订 numPr 完整语义降级（只重建 ilvl 保留 base）、右缩进/悬挂/tabs/keepNext 无编辑器入口故不追踪、每段落仅留一个 pPrChange；表格单元格段落逻辑可用但未自动化验证；页眉页脚编辑仅文本行（沿用原行对齐/加粗/字号）；写回会把不等宽栏统一成等宽；加粗→取消加粗后落盘留显式 `<w:b w:val="0"/>`（视觉等价初始） |
-| PPT | 形状选中 / 拖动 / 8 手柄缩放、⌘ 多选、方向键微调、Delete、⌘D、⌘A、Escape、多形状按外接矩形对齐、分布命令（ribbon 暂无按钮）；旋转手柄（单形状绕中心旋转、选中框与 8 手柄随转、Shift 吸附 15° 倍数、松手写回 `a:xfrm rot`、可撤销）；母版 / 主题编辑（切换 slideLayout、编辑 `a:clrScheme` 全部配色键即时反映到 schemeClr 形状、母版背景 solidFill 编辑，真实 part 落盘、重开一致）；框选矩形套选（空白处拖拽矩形、松手套选相交形状，与 ⌘/Shift 多选并存）；对齐吸附线（搬移时边 / 中心与其他形状或画布对齐 ≤6px 显示参考线并吸附）；多形状整体旋转（各形状 rot += Δ 且中心绕多选外接矩形公共中心旋转，走既有 xfrm ShapeOp 可撤销）；演讲者备注（notesSlide 解析 / 底部可折叠自绘面板 / 写回，无 part 自动创建 + rels + Content_Types）；表格单元格编辑（双击就地编辑 `a:t`、右键增删行列）；动画 / 切换基础版（`p:transition` + `p:timing` entrance appear/fade/wipe，CSS 序列播放、演示模式切换播放，右键编辑写回 mainSeq 结构）；SmartArt（dgm data part 节点树 + 父子树形连线降级渲染，双击编辑写回 `dgm:t`、跨 part undo）；notesMaster 新建（无 notesMaster 时建 part + rels + Content_Types + `presentation.xml` notesMasterIdLst 登记，unzip 交叉引用合规）；动画 emphasis / exit（7 preset：entr appear·fade·wipe + emph spin·growShrink + exit disappear·fadeOut）+ 严格 clickEffect 顺序（按 mainSeq 文档顺序播放）；合并单元格表格行列增删修正（逻辑列槽位模型兼容 gridSpan+hMerge 与仅 gridSpan 两种 OOXML 表示，增删后每行逻辑列数恒等于 tblGrid）；ribbon 新增「动画」组（出现动画 / 移除动画 / 播放动画 / 切换效果）；按用户报障修复：插入文本框双击就地编辑（`shapeText` 走 `editSlide` 保 undo，`contenteditable` 仅编辑态挂载、纯文本节点不用 v-html、文字层 pointer-events 分级解决「一拖就动」，a:t 转义 `& < >`）；左侧缩略图右键菜单（13 项接真实命令，复制 / 删除 / 隐藏 / 移动 / 切换等）；左侧缩略图拖拽重排（pointer 4px 阈值 + 插入位置指示线 + `pptx.slides move{from,to}`，DOM 与落盘顺序一致、no-op 边界、单击/右键不破坏）；幻灯片图片粘贴与菜单插入统一走 `insertImageBlob`（document 级 paste 只取 image Blob 不抢文本输入、自然比例 60% 限幅 + 就近定位，`ppt/media` 真实落盘、save→重开可见）；原生图表数据编辑（`core/pptx/chart.ts` 解析 `ppt/charts/chartN.xml` 的 c:ser/c:cat/c:val，5 种引用形态 strRef/numRef/multiLvlStrRef/strLit/numLit 全支持、缓存值渲染；`view/pptx/chart.ts` SVG 自绘柱/折线/饼 + 轴刻度图例；双击/右键「编辑图表数据」开自绘面板，走 `pptx.shapes` 的 `chartData` op 把缓存点与 c:f 及 embedded xlsx 源单元格双写、点数变化 retarget 区域、单步 undo） | 形状布尔运算；图表不支持 3D / 组合图 / 次坐标轴 / 数据标签逐项格式化 / chart style-colors part / 趋势线误差线（渲染结构一致非像素级）；SmartArt 真实 layout1.xml 布局算法 / quickStyle / 富文本样式；动画 path / mediacall 未支持、clickEffect 严格顺序仅覆盖 entrance；`mc:AlternateContent` 包裹的切换不识别；继承占位符实例化未做；PPT ribbon 无表格组（表格入口在画布右键 `tableRow`/`tableCol`，新增「插入表格」按钮需先扩内核 insert op） |
-
-完整 1:1 还原是分阶段工程：Office 桌面端的命令面约数千项。ONLYOFFICE 级保真的子系统清单、差距矩阵与重写顺序见 [`docs/onlyoffice-fidelity-gap.md`](docs/onlyoffice-fidelity-gap.md)——字体度量内核（`core/font/`，fonts.wasm 接管 + TS 断行/禁则/justify）已于 2026-11-22 落地并通过 x11 探针；同日样式计算层与颜色管线（`core/docx/styles.ts` 对齐 sdkjs `CStyles.Get_Pr/Internal_Get_Pr`：表格种子替代 docDefaults、编号层只并 GetParaPr、bug 31469 真实边界；`core/theme.ts` 逐字节移植 `CColorModifiers.Apply`：HSL 0..255 值域、子元素 tint/shade 走伽马 RGB 通道、Word 属性形式 themeShade/themeTint ≡ lumMod/lumMod+lumOff、graySaturation 与通道级 Mod/Off 补齐；`core/color.ts` 的第二套 0..1 近似删除并转发至同一管线，ST_PresetColorVal 换 190 项全表）通过 x12 探针，40/40 冒烟零退化。P2 行高分页同日落地：`core/docx/layout.ts` 内核逐式移植 sdkjs `CParaLineMetrics`（auto 倍数只乘文本高 / exact 1pt 下限 + 三级削减 / atLeast 补差且 Gap 并入 Ascent 坐底）与分页回环（widow 双侧、keepLines 整段挪、keepNext 链卷回、after 溢出豁免、续页免 Before、表头重复、多栏片段模型），`view/docx/flow.ts` 接线后 `OfficeDocView.vue` 弃 DOM 测量回环、块高改字体内核自算，`paginate()/estimateHeight()` 删除收敛为单一分页实现；x13 探针（同步断言 + 端到端真 docx）全绿，41/41 零退化。P3 表格布局同日落地：`core/docx/table.ts` 内核逐式移植 sdkjs `private_RecalculateGrid` 两阶段列宽（Phase 1 固定网格：声明种子 + 合并撑开落末列 + `Internal_ScaleTableWidth` 迭代锁列；Phase 2 AutoFit 五数组 minMargin/minContent/maxContent/preferred/minNoPref + 六大分配分支 + 合并列后处理）、内容度量链（单元格逐块 max、nAdd 双分支、显式宽夹到 W 本身、段落词边界扫描——空格缓存不入尾随 max、tab 词分隔）与行高结算（rv=trHeight+边距、exact 顶边吃进回补相消、atLeast/auto max(rv,内容)+边、竖合并差额摊末行），parser 补 tblW/tblLayout/tblCellSpacing/tcW-pct 四字段（pct = 1/50 百分点），`flow.ts` 接线 warmTable 异步预热 → layoutTable 同步消费；连带修 `wrap.ts` 行首超宽原子词不硬断的缺口；x14 探针（9 组同步断言 + 端到端真 docx 表头 repeat=[0]）全绿，42/42 零退化。P4a 行级激活 2026-11-23 落地：`layout.ts` 行几何补 `LineGeom.sp`（justify 分母，与 `emitLine` 可见宽口径同源）与 `FlowBlock.detail/xLimit`，`flow.ts` 段落逐行 detail、`slicesOf` 恒物化 `ParaFrag{xl,tail,lines}`；新建 `view/docx/lines.ts` 做码点→UTF-16 双空间映射（emoji 代理对 / ref 原子对象 / w:br 行尾剔除），`docx-render.ts` 新增 `linedHtml` 逐行 div 渲染（`white-space:pre` 让浏览器退出断行，行宽单一真值来自内核 `xLimit`；justify 非末行 `text-align-last`、hanging 缩进续行 padding、首行 text-indent、空段 markSz 撑高；square/tight 浮动图段整段回退浏览器断行）；Carlito `@font-face` 与内核 `DEFAULT_FONTS` 同源，行宽残余仅 kerning/连字 feature 集差异（归 P4b Canvas 迁移消化）；x15 探针（countSpaces 七组 + 真字体 detail 契约 + slicesOf 跨页/跨栏物化）全绿，43/43 零退化。行级 DOM 的编辑层连带修复同日完成（任务 #73）：`w:br` 造成的偏移空洞不再让 `posFromDom` 把光标打回上行尾、`ptInPara` 不再抛 IndexSizeError；copy/cut 与右键复制统一走模型切片 `selPlain`（块级行 div 会让 `Selection.toString()` 给软换行补伪 `\n`，粘贴即静默固化段落结构）；`pagesVer` 渲染戳守卫让异步重分页期间的错配帧回退块级渲染且不消费待恢复选区（此前每次击键尾字被吞、光标被抹）。P4b-1 行宽残余同日落地：x16 探针三方量化（raw=逐码点裸 advance / shaped=HB 字簇宽 / dom=浏览器实渲）证实拉丁 kern 对偏至 −0.98pt（'To'）而 shaped≈dom（±0.017pt）——残余根因在 `snapOf` 测量链绕过 shaping；`measure.ts` 增 `clusters()` 字簇宽表，`flow.ts` 前缀和改走 shaped（sdkjs `ParagraphTextShaper.Shape` 同路，kern 折入不改 cluster 数），e2e 断言内核行宽 ≡ 浏览器实渲（残余归零）；CJK 缺表同批修复——全角码点（UAX #11 W/F 区间）本面无字形时内核给 1em 全角框对齐浏览器系统回退（sdkjs miss 半角框把中文行宽低估一半：'你好世界' 22.3→44pt vs dom 43.98），`clusters()` 内同口径校正（HB 内部 .notdef 不受 JS 层影响），真 CJK 字体精确度量留升级路径；x16 探针 + 44/44 零退化。编辑层遗留两项实测收口同日完成：IME 组合期分页冻结（`onComposing` 钩子 + `visibleSnapshot`，组合 DOM 不被 v-html 重建掐死、组合结束统一补交），x17 探针锁全偏移往返恒等（段中 / 段尾 / 连续 `w:br` / CJK 四段形零漂移——审计疑点「段尾 br 漂移一字符」实测不可复现，关闭）与冻结门红绿判别，45/45 零退化。P4b-2 Canvas 渲染迁移同日裁决为 YAGNI：x18 探针逐字符保真量化（9 语料 × 行总宽 + 字簇边界双门）首跑暴露 `'office fi fl ffi'` 行宽偏 3.388px，逐簇诊断揪出真因不在连字口径而在 `shapeText` 尾簇回映射 bug——`cpIndex` 二分上界锁 `prefix.length-2`，尾簇多码点（`ffi` 合并三连字）时截丢尾码，簇覆盖 15/16 破裂 `clusters()` 长度恒等契约，flow 防御补裸 advance 虚增行宽（一切以连字结尾的文本受害）；修复（尾簇直接覆盖到串末码点，对齐 sdkjs `CCodePointsCalculator.calculate(CLUSTER_MAX)` 语义）后全 9 语料 ≤0.05px、calt 贡献恒 0（Carlito 无 calt 特征）、`ligDebt` 清空——DOM 文本引擎位置精度已达内核度量上限，Canvas 迁移不构成保真缺口（sdkjs 取证：Word 正文确为字形位图 blit，`private_FillGlyph2`/putImageData，wasm 栅格原料已 vendored，留作未来性能议题而非精度议题）；x18 探针含簇长度恒等锁（断言前置，恒等破裂先红），46/46 零退化。P5 Excel 列宽/行高 2026-11-23 落地：`core/xlsx/colwidth.ts` 内核收敛 sdkjs 取整三件套（`ascFloor/Ceil/Round`，`kLeftLim1` 精度补偿）、ECMA-376 三段式列宽换算（chars→mcw→px 与反算，8.43↔64px 回环锚点）、MDW 量链（默认字体测 "0123456789" 逐字 px 取 max，Carlito@11→7；padding=2/ppb=5）、默认列宽 base=8→ceil8→64px、行高度量口径（`th=ceil(ascent)+ceil(|descent|)+1` 边框像素：19px@11pt / 25px@14pt，证伪 14pt 启发式 27px 的 +2px 偏差）、默认行高 `customHeight` 门控与自适应 `min(546px, max(old, tm.height))`、autoFit `tm.width+ppb→chars→clamp 255→三段式` 回环；`CellMetrics` 门面在 loadSheet 前一次异步预热度量、下游全同步消费。视图接线：workbook 解析弃 `floor(w*7+5)` 旧近似、styles 暴露 `baseFontName/basePt`、editor 新增 `autoFitCols/autoFitRows/colWidthChars` op（显示串派生，弃 DOM scrollWidth 与 `lines*18+6` 启发式）、structure 补 255 字符/409.5pt clamp、rowpatch 写回反算走 `colWidthToCharCount`、ribbon 列宽对话框改字符数口径（Excel 同款）。named style 保真裁决：sdkjs 无 BasedOn 链（`getCompiledStyle` 只 merge 表格样式→cellXfs→行/列 xf→条件格式，`xfId` 仅名字标签），保真定义 = `cellStyleXfs`/`cellStyles` 定义透传写回不丢——StyleEditor 全 DOM 持有 + `serialize` 透传天然满足，x19 第 5 节端到端固化（fixture→open→load→set+format→save→重开，八项 XML 透传 + 列宽 64px 回环 + A1 s=1 不变 + B1=world）；iWork numbers 转换链 `w*4/3/7` 近似记残余。x19 探针（MDW 簇长度恒等锁前置 + 三段式锚点 + 行高双锚 + autoFit 回环 ±0.011 + named style 16 断言）全绿，**47/47 零退化**。本轮按「选区 / 拖动 / 多选 / 键盘 / 右键 / 工具栏作用范围 / 渲染持久化 / 工具栏结构还原」这类高频交互补齐；第三批覆盖 PPT 多形状整体旋转 / 演讲者备注 / 表格单元格编辑 / SmartArt 降级渲染 / 动画切换，Word 页眉页脚分栏 / 图片裁剪，Excel 填充序列对话框与自动填充选项；第四批覆盖 PPT notesMaster / 动画 emphasis·exit / 合并表格增删，Word even 页眉 / 移动修订 / 分栏栏感知，Excel 1904 校准 / 可刷新序列对象；第五~七批按用户报障与截图修复：Excel 筛选全选还原 / Ctrl+A / 左上角全选 / 直接键入 / 冻结列抖动、Word 布局 tab 无效、PPT 缩略图右键与文本框编辑，并补 Word run 级格式修订、Excel ribbon 按桌面版 8 tab / 193 按钮 1:1 还原（137 真实现 + 56 明确灰显，消灭「点了没反应」）；第八批按用户报障修复：Excel 切格丢编辑、PPT 缩略图拖拽重排 + 图片粘贴/插入、Word 表格 15 按钮选区加固 + 图片粘贴（含单元格内）落盘。第九批补齐三项 1:1 遗留：PPT 原生图表数据编辑（解析 + SVG 渲染 + 自绘面板 + 缓存/源单元格双写）、Word 段落级 `w:pPrChange`、Excel 序列公式化全链路（公式落 `<f>` + 源格改自动跟随）。第十批按用户截图报障修复 Excel 贴图与渲染：粘贴 / 插入图片锚定到当前单元格（读自然尺寸等比限幅，落真实 OOXML oneCellAnchor、save→重开同位）；8 手柄缩放全程等比（`object-fit: contain` + 按原始宽高比联动另一边，杜绝拖角压窄），四向手柄拖动与格线吸附保留比例；渲染对齐桌面版（工作簿默认字体 `font 0` 落到网格根，未指定字体的格继承而不再回退 UI 字体；列宽按 Excel MDW 公式 `Truncate((256*w+INT(128/MDW))/256*MDW)` 换算，默认列宽同步；合并区四边框从各边实际格合成，不再只看锚格）。样式与图片工具抽到 `view/xlsx/cellstyle.ts`、`view/xlsx/image.ts` 保持单文件 ≤2000；按用户报障去粘贴浮层：根因是 `pasteSmart()` 用 `navigator.clipboard.read()` 读图，WKWebView 弹系统 Paste 授权浮层（需再点一次）；改为 Cmd+V 不 preventDefault、一律走原生 paste 事件的 `clipboardData`（图片/文本直读），名称框/公式栏/编辑框聚焦时让原生粘贴，v48 增 `cmdVNotBlocked` / `pasteInInputIgnored` 两断言。去浮层后图片粘贴失效的根因是 WKWebView 无 `contenteditable` 焦点不派发 DOM paste——加隐藏 1×1 焦点锚（`view/xlsx/focus.ts`，选格 / pointerup / 提交后回焦，文本控件聚焦时不抢），`anchorExists` / `anchorEditable` / `anchorFocused` / `pasteWithAnchor` 断言覆盖。按用户报障修「图片反复拖越拖越小最后消失」：根因 `anchorTo()` 回写丢掉 `from` 的 `colOff`/`rowOff`，px→cell→px 往返每次吞掉亚格偏移；签名改为带双向偏移累加，几何抽到共享模块 `core/xlsx/drawanchor.ts`（`posTo` 为 `absX`/`absY` walk 的精确逆，`rewriteAnchor` 同步刷新 `a:ext`），浮图连续 6 次拖动实测 120px 恒定。按用户报障实现 Excel 365「置于单元格」语义：格内图（`oneCellAnchor`）恒贴合宿主格，move 换宿主格且按落点格现尺寸贴合（不撑格），resize 撑大宿主列宽 / 行高并经 `XlsxEditResult.layout` 回传让视图重排网格；`XlsxDrawingInfo.host` 回传宿主行列，撑格走 `setColWidth`/`setRowHeight` 可撤销；`cellGrow` / `cellRehost` / `regrowStable` 断言覆盖。空图修复：WKWebView 对 Worker 跨线程产生的 blob URL 解码不稳定，`client.mediaUrl` 的 blob URL 作 `<img src>` 表现为图框在但内容空白；Excel drawing 渲染改走 `view/xlsx/media.ts` 的 `mediaDataUrl`（`client.call('part')` → `FileReader.readAsDataURL`，按 client 实例隔离缓存、失败清缓存并上抛），并发刷新按 media 在最新数组定位避免 src 写丢，加载失败不再静默吞而是 `emit('error')`；v48 增 `drawingRender` 探针 + `imgDecoded`/`imgDataUrl` 断言闭合「只测锚点不测解码」的盲区。空图二次修复（真机截图仍空，Playwright WebKit 实证）：macOS 截图剪贴板字节是 TIFF 且声明 `image/png`；WebKit 对 TIFF **完全没有解码能力**（无类型 blob / 带类型 blob / data URL 三条路实测全部 naturalWidth=0，与 Chrome 的内容嗅探行为不同），前端 canvas 转码救不了，此前「MIME 错配」假设已被证伪——真因是解码失败后静默兜底 320×240 插入空图。修复三层：① `view/xlsx/image.ts` `prepareImage()`——浏览器能解的统一 `toPng()` 重编码，解不了的原生转码，全失败返回 null；`insertImageFile` 失败即报错取消，**不再插空图**；② Rust `transcode_image` 命令（`image` crate tiff feature，原始字节通道回传 PNG），`OfficeEngineHost` 经 `transcodeImage` prop 注入 `OfficeSheetView`，真机 TIFF/位图截图可正常插入；③ WebKit 冒烟验证：TIFF 粘贴 `added=0`（错误取消路径）、PNG 粘贴 data URL 解码正常。`.xls`（Excel 97-2003）编辑已开放：内核 `biffToXlsx` 打开时已转 OOXML 且 `protocol.ts` `converted` 字段明确标注 editable（与 `.doc` 先例一致），此前是 `officeEditable` 白名单遗漏；现补 `xls/xlt/ppt/pot/pps`，保存写回新格式 OOXML 字节。焦点锚回归修复：`commitEdit` 的 `nextTick(refocusAnchor)` 在 blur 提交时夺走名称框焦点（`A10` 落进单元格覆盖原值），改为 blur 路径 `commitEdit(false)` 不回焦（点格回焦由 `setSelection` 负责），v42 `nameBoxCommit` 恢复；v26~v48 共 24 套冒烟全绿。下一批优先项：PPT 形状布尔运算 / SmartArt 真实布局 / 动画 path·mediacall，Word 移动修订完整拖动路径 / 分栏字符级光标 / 段落 numPr 完整语义，Excel 冻结列原生 sticky 四面板 / 工作日序列公式化（引擎补 WORKDAY）。分布命令已放在 `OfficeSlideView.commands.distribute`，需 ribbon 补按钮才暴露给用户。P6 PPT 母版继承 + normAutofit + 动画时序 2026-11-24 落地：`core/pptx/inherit.ts` 内核逐式移植 sdkjs `getMatchingShape` 六级匹配瀑布（SlideBase.js:327-466：reduced type/idx 精确 → title 特例 → special-ph 忽略 idx → info 截止 → 单一 body 兜底 → idx-only 坏配 → 最终 body 兜底，`bBadMatch` 精确串判别）与 `Check_AutoFit` normAutofit 二分搜索（Shape.js:5140-5250：aScales 16 项含末项 10000 哨兵、`heightOf(100000)≤clipH` 早退、低档放得下回探高档且高档 `>=` 等号判溢出、步长耗尽锁最后已知档、下界跌破锁 25000、标题 90000 下限、lnSpcReduction=0.2*(100000-scale)>>0）；`anim.ts` 补 `parseTimeValue`（Timing.js:162-174：非串→undefined、indefinite→Infinity、parseInt 截断）与 dur/delay 采集（clickEffect 自身 @dur 优先、缺省取子树最大有限 dur；首个 stCondLst/cond@delay），XEl/RNode 双侧同口径。parser 接线：`indexPlaceholders` 弃 byIdx/byType 双 Map 改 `phGlyphs` 文档顺序序列（sdkjs 只扫 spTree 直接子级，grpSp 下钻是偏差），`inheritChain` 改走 `matchPlaceholder`（getHierarchy 语义：layout 查询带自身 bSingleBody、master 查询硬编码 true、用形状自身 ph 而非 layout 派生型），新增 `isSingleBody`（ShapePrototype.js:685：自身 body/null 且同 spTree 无其他 body 占位符）；视图接线：`OfficeSlideCanvas.playList()` 从固定 650ms 步长改 dur/delay 驱动时序（点击时刻=上一效果终点、效果起点=点击+delay、缺省 650ms 保 v32 基线、封顶 8s）。x20 探针（瀑布十态 + 二分六轨迹 + parseTimeValue 六形态 + dur/delay 端到端 + 空白三件套生成→内核打开）全绿，**48/48 零退化**。新建文件对话框同步扩至 11 种类型：Office 三件套空白文档由 `core/blank.ts` 生成最小 OOXML 包走二进制通道落盘。P7 映射层补全同日落地：先做「版本开关」裁决——`CurFileVersion` 是 .docser 内部二进制流版本门控（MdView 不产 .docser，整类作废），`compatibilityMode`（settings.xml `w:compat/w:compatSetting`）才是 OOXML 面开关，读取路径只喂两处算术（`CTablePr.InitDefault` 默认单元格左右边距 mode≤Word12→0.5pt 否则 5.4pt；新建表宽预算 nAdd mode≤Word14→10.8pt 否则 0）。新建 `core/opc-types.ts`：openxml.js Types 注册表 136 条全量直抄（空串 contentType 原文注释态照抄）+ MIME 表（OPC Default 口径）+ `PartNameIndex` 计数器语义（key=enumerateType||relationType，首调 1 置 2，共享键交替递增；接线保留 opc.ts 的 freeName 防覆盖守卫——保真=行为可复现，非复刻上游不查重缺陷）+ `contentTypesAdd`。新建 `core/docx/compat.ts`（parseCompatMode 二进制侧口径，`w:uri` 为主兼容 `url` 别名，parseInt 截断，缺失→Word12）与 `core/docx/postload.ts`（PostLoadPrepare 六件事三作废三保留：缺省样式按归一化名补建四个——Normal/Default Paragraph Font/No List/Normal Table；灰标法环检测直译——undefined 进/visiting 重入切断 BasedOn/done 整体跳过，每个环恰切一处=最先被重入的成员）。表距两层语义接线：种子 = compat 门控（parser tableInner）→ 链 merge（Normal Table 的 tblCellMar 5.4pt 覆盖种子——**无样式表恒 5.4**，自定义表样式缺 cellMar 才吃到种子），`StyleSheet.applyPostload()` 在 open() 内 settings 解析后执行（注入落 default 槽 + 环切断 + 清缓存），`DocxEditor.insertTable` 宽预算走 nAdd，`docx:meta` 带 compatMode 到视图。未知元素透传结构性验证（saveDocx 未触碰 item 原样写回 + genParagraph 克隆源 pPr + RNode 字节保真树）：x21 探针四节 85 断言（TYPES 抽查/计数器 15 态/contentTypesAdd 8 态；灰标法 11 态含双环插入序判别、缺省样式 11 态、StyleSheet 端到端装配前对照；compat 九形态+算术八态+表距两层六态端到端；透传 round-trip——未触碰 save **字节恒等**、编辑重生成后顶层 `xyz:thing` 与 pPr 内 `xyz:meta` 全存活、重开再 save 恒等）全绿，**49/49 零退化**。P8 内置样式全量写回同日落地：sdkjs 保存时把引擎全部内置样式写回 styles.xml（`WriteStyles` 遍历 `styles.Style` 全表），MdView 此前只回文件原有 + 编辑器新增 → 内置样式缺口。目标集不是「4 缺省」而是 **CStyles 构造器全量播种的 190 条**（127 表 + 32 段落 + 30 字符 + 1 编号），其中 127 表样式的 `Create_*` 是运行时参数化 `fUF(theme, tint, shade)`，静态提取不可达——故在宿主 realm 真跑 `new CStyles(true)`（`runInThisContext`；`vm.createContext` 的独立 intrinsics 会让 `instanceof Array` 跨 realm 永假、`CParaTabs.Set_FromObject` 静默失效丢 Tabs）walk 快照机械转录为 `core/docx/builtin-data.json`（384KB / gzip 13.5KB）。本次最关键的取证是 **themeTint/themeShade 单位真相**：ECMA `ST_UcharHexNumber` = 1 字节 hex（FF=原色），产物 `w:themeTint="99"`（=153，十进制 99 是巧合陷阱）/`"BF"`（=191）、sdkjs `CreateThemeUnifill` 实参是 0x99/0xBF 字节族、Apply 走 `wordTint/wordShade`（raw/255）三方交叉——**MdView 读侧原 `parseFloat("BF")=NaN` 静默吞色是真 bug**；x12 锁的万分比口径（Word 从不写）经 `parseThemeMod` 判别联合保留兼容（1-2 位 hex→byte 走 wordTint/wordShade，≥3 位→pct 走 lumMod/lumOff），`resolveColor` 属性形式重写为 **tint-先 shade-后**（sdkjs `addMod` 序，双 mod 共存 137 条）。写语义三处同构（`WriteBorder`/`WriteShd`/rPr 文字色）：**flat = `Color ?? 解析(Unifill)`**，Auto/不可解析 → auto，主题族门 = `Unifill || (Color && Auto)`；普查实证 border 866 Unifill 全带非 Auto 的 Color 槽、text 241 → 66 带 + **175 无**（旧实现发 `val="auto"`，引擎却 resolve → hex，本次修真偏差）、shd 439 Color 恒白哨兵→auto + ThemeFill 365 全需解析（CT_Shd 词表与 CT_Color **不同族不可混用**）。新建 `core/docx/builtin.ts`：单位族 + 全词表 + 三处同构颜色发射（`resolvedHex` 走 theme.ts **单一管线**禁重造）+ ECMA 序发射（pPr = CT_PPrBase 序）+ **规划器 `planBuiltinWrite`**——查重必须 **styleId ∪ 归一化名字**（内置样式的语言无关身份是 `w:styleId`，`w:name` 可本地化；纯名字查重会把中文「标题 1」/id=Heading1 误判缺失 → 重分配 id → **生成幽灵重复**），再 id 分配避碰撞 + basedOn/next/link 三级重定向（文件已有 id 原样用 / 文件已有目标归一化名用文件 id / 同批新 id / 都不可达则丢弃防悬空）；`builtinMissing` 与规划器共用 `filterMissing` 单一实现。接线是**单一来源收敛**：`writebackBuiltins` 成为 saveDocx 与 ensureStyle 的同一条路，旧 `canonDef`（硬编码 Heading1 16pt/`2F5496`，与注册表 20pt/`0F4761`+accent1/BF **分歧**的双颜色源）**整删**；查重读 **styles part 的文件面**而非活动视图（活动视图被 postload 计算面注入了 `normal`/`NormalTable` 薄态 id，按它查重会把富态 Normal/TableNormal 误判已在 → 不落文件 → 重开不收敛）；**字符串级插入**到根闭合前（自关闭根展开为成对标签），既有字节零扰动——saveDocx 每次保存都跑，重排整个 part 会扰动未触碰样式、违 P7 透传不变式；写回条目 `add()` 进活动视图但**不动 defaultPara 槽**。幂等闭环：首存后文件全量 → 再存写回集空 → 重开 `missingDefaultStyles` 按同一归一化命中 4 缺省 → 注入集空 → 读写收敛。有意不忠实两处（ponytail 标注）：Subtitle 的 NumPr 仅 Lvl 无 NumId → 不发 numPr（残缺元素破坏重开幂等）；Create_* 段落面键名 `Borders` 而 `CParaPr.Set_FromObject` 只认 `Brd` → 表样式段落面无边框是 sdkjs 真实现（Word 自写表样式同样不带 pBdr）。x22 探针五节（注册表 190 与四类分布 + 4 缺省 id 齐全 + styleId 唯一；单位/形态逐条实测推演——Table Grid sz4、Title spacing −10/sz56、**Heading1 全形态串等锁**、Subtitle 无 numPr、Plain Table 1 CT_Shd 族 `w:fill=F2F2F2`、text noColor `5E923C` 读写对称回读同值、customStyle **属性化**；规划器五态含本地化按 id 排除不生幽灵、引用重定向零悬空、missing==plan 同源；端到端 save → 190+既有透传零扰动 → 二次 save **字节恒等** → 重开再 save 收敛 → ensureStyle 读回注册表 id；自关闭根展开）全绿，**50/50 零退化**（x12 万分比路径未破）。
-
-如实保留的边界：Word 修订为 run 级 ins/del + 剪切粘贴 moveFrom/moveTo + run 级格式 rPrChange + 段落级 pPrChange（不含完整拖动搬移路径、作者单一）；分栏光标为段落级校正非字符级；页眉页脚 even 变体已做、HF 编辑仅文本行；`decimals` 固定覆盖 `0.0 / 0.00`，不按当前 numFmt 增量；`recalc` 实为重载工作表；mac 上 Ctrl+click 归系统右键，加选统一用 ⌘；PPT 复制后保留原选区索引，不自动跳到新副本；SmartArt 只做节点树降级布局，动画覆盖 7 种 preset（entrance / emphasis / exit）不含 path·mediacall；原生图表不支持 3D/组合图/次坐标轴；Word 表格合并/拆分需对应选区状态、底纹/边框/插表为二级菜单需点选项；Excel 的图表 / 条件格式 / 数据验证 / 切片器 / 透视 / 序列用私有 sidecar（`xl/mdview/features.json`）辅助存储交互元数据，真实 Office 打开并另存会丢弃该 sidecar，导致 MdView 再打开这些交互状态丢失（真实 OOXML part 仍在，Office 仍能识别）；序列已公式化（源格改自动跟随），但工作日序列仍为静态值。
-
-> 已知边界：协同编辑 RPC 未接 UI；Word 长表跨页仅覆盖单栏整表超高场景，tight 绕排为矩形近似；PPT 文本编辑按段落重建，段内多样式会合并；HTML iframe 内右键由其自身文档处理，自动换行开关不作用于跨文档内容。
+桥接方式：Rust `craft.rs` spawn `<bin> mcp`（MCP stdio JSON-RPC 2.0：initialize → tools/call），暴露 `craft_call` / `craft_status` Tauri 命令；前端 `core/craft.ts` 提供类型化通道（gridcraft 22 工具 / wordcraft 18 工具）。两仓各自 patch 不同 egui fork，进程内不可共存，故一律进程外。**当前形态**：桥与契约探针已落地、双轨并存——TS 内核承担选区 / 编辑 / 渲染主流程，Craft 通道供 514 函数目录、透视 / 图表与排版内核等重能力按需接入，视图层消费逐步推进。
 
 ### PDF 在线编辑
 
 `pdfjs-dist` 渲染当前页、提取文本层、识别扫描件；`pdf-lib` 只在原字节上叠加改动。保存经同一条原始字节通道 **覆盖原路径**，未改动页仍是原来的矢量文字，可选中、可搜索。
 
 ```
-readFileBytes → pdfjs 单页渲染 + 文本层命中框（记录字体族 / 字号 / 基线 / 墨色）
+readFileBytes → pdfjs 单页渲染 + 文本层命中框（字体族 / 字号 / 基线 / 墨色）
    → SVG 覆盖层：文字替换 / 图片对象（拖动 · 缩放 · 删除）
    → pdf-lib 叠加：白块只遮变化字符 + 原字体新文字 + 图片
    → Uint8Array → writeFileBytes(原路径)
 ```
 
-- **字体保真**：pdfjs 把文档内嵌字体注册进 `document.fonts`，家族名即 `TextItem.fontName`。写回时复用该字体与真实字号 / 基线，并从页面渲染像素采样原墨色（不是纯黑）；编辑态 SVG 预览用同一套字体与颜色，所见即所得
-- **最小覆盖**：按原文与新文的公共前后缀求差，白块只遮真正变化的字符区间，未改动字符仍是原 PDF 矢量文字，不做整行重绘。整行改写或新字更宽时退回整行覆盖，字形依旧沿用原字体
-- **文字**：点页面文字块改内容，中文可直接编辑；文档用标准 14 字体 / Type3 等未注册字体时退回系统中文字体，仍能正常写入
-- **图片**：`Ctrl/⌘+V` 粘贴剪贴板图片、工具条「插入图片」选文件；选中后可拖动、右下角缩放、`Delete` 删除、「复制图片」写回剪贴板
-- **内嵌图片**：「页面图片」提取本页原有图片，可「复制」出来或「插入」一个副本进页面
-- **扫描件**：前 3 页无文本层即判只读，隐藏编辑工具条；`save()` 返回空，不落盘
-- **页签常驻**：与 Office 一致用 `v-show` 切换，不重解析；`pdfRev` 变化时重读磁盘
-- **防误写**：PDF 隐藏「另存为 / 转格式 / AI 助手」；无改动时 `Ctrl/⌘+S` 不写盘，避免文本通道把二进制写成空文件
-- **WebView 兼容**：`pdfjs-dist` 锁在 4.x（4.10.38）。6.x 依赖 `Map.getOrInsertComputed` / `Float16Array` 等 Tauri WebView 尚未提供的 API，会抛 `TypeError: ... is not a function` 导致 PDF 打不开
+- **字体保真**：文档内嵌字体注册进 `document.fonts`，写回复用原字体 / 字号 / 基线，墨色从页面像素采样（不是纯黑）
+- **最小覆盖**：按公共前后缀求差，白块只遮真正变化的字符区间，不做整行重绘
+- **图片**：粘贴 / 插入 / 拖动 / 缩放 / 删除 / 复制回剪贴板；「页面图片」提取本页原有图片
+- **扫描件**：前 3 页无文本层即判只读；`save()` 不落盘
+- **兼容**：`pdfjs-dist` 锁 4.x——6.x 依赖 Tauri WebView 尚未提供的 API
 
 ### 格式转换
 
@@ -187,65 +147,113 @@ readFileBytes → pdfjs 单页渲染 + 文本层命中框（记录字体族 / �
 | `xlsx` | md · csv · docx · pptx |
 | `pptx` | md · txt · docx · xlsx |
 
-> PDF 目标由前端 `marked → html2canvas → jsPDF` 所见即所得导出，仅支持 md 源，产物为位图、文字不可选。
+> PDF 目标由前端 `marked → html2canvas → jsPDF` 所见即所得导出，仅支持 md 源，产物为位图。
 
 ### AI 助手（可选）
 
-- 对接任意 **OpenAI 兼容接口**：多 profile 配置（base_url / api_key / model），可分别指派 chat 能力
-- 右下角悬浮窗 **流式输出**：智能摘要 · 生成标签 · 内容解读（单文档任务）
-- **批量 AI 摘要**：4 并发，docx / xlsx / xls / pptx 经 Rust 枢纽转 Markdown 后摘要，12K 字符截断；结果按 `size:mtime` 指纹缓存于 `summaries.json`，支持一键重算、首行悬浮预览
-- **搜索并入摘要**：摘要文本也参与子串命中，正文没有的关键词也可能搜到
-- 未配置 AI 时相关操作会提示并打开设置
+- 任意 **OpenAI 兼容接口**：多 profile（base_url / api_key / model），Rust `reqwest` SSE 流式代理
+- 右下角悬浮窗流式输出：摘要 / 打标 / 解读；批量摘要 4 并发、按 `size:mtime` 指纹缓存
+- 摘要文本并入搜索命中；未配置时提示并打开设置
 
-### 相似图片（本地归组，与 AI 无关）
+### 相似图片（本地，与 AI 无关）
 
-- Rust 端 `images.rs` 递归扫描 9 种图片扩展名，计算 **9×8 灰度 dHash**（64 bit），每 20 张落盘缓存，按 `size:mtime` 复用
-- 并查集按汉明距离 ≤ 阈值连通（滑杆 0–20，默认 10，比较上限 3000），只输出成员 ≥2 的分组
-- 工具页：索引计数与进度、可释放空间估算、分组卡片（缩略图 / 尺寸 / 体积 / 路径）、点击打开、单张删除后自动重算
+- Rust 端递归扫描 9 种图片扩展名，计算 9×8 灰度 **dHash**（64 bit），按指纹落盘缓存
+- 并查集按汉明距离 ≤ 阈值连通（滑杆 0–20），只输出成员 ≥2 的分组
+- 工具页：可释放空间估算、分组卡片、点击打开、单张删除自动重算
 
 ### 体验
 
 - 深色 / 浅色主题一键切换（mermaid 与 Office 引擎同步重渲染）
-- 首页统计与快捷入口、帮助页、侧栏拖拽调宽 / 收起 / 边缘悬浮展开
-- 文件浏览器网格 / 列表视图、面包屑、行内重命名、全局超薄透明滚动条、toast 与统一确认弹窗
-- 快捷键：`Ctrl/Cmd+S` 保存、`Ctrl/Cmd+F` 查找、`Esc` 关闭查找、查找栏 `Enter` / `Shift+Enter`、`⌘+Shift+I` / `F12` 打开 WebView 调试器
+- 内容区右键「自动换行」全局开关（CodeMirror / 文本 / Markdown / Word / PPT / 表格 / PDF 统一生效，偏好持久化）
+- 首页统计与快捷入口、帮助页、侧栏拖拽调宽 / 收起、网格 / 列表视图、全局超薄滚动条
+- 快捷键：`Ctrl/Cmd+S` 保存、`Ctrl/Cmd+F` 查找、`Esc` 关闭查找栏
 
 ---
 
-## 为什么切大文件页签不卡
+## 构成
 
-旧链路给 Office 宿主绑了 `:key="文件路径"`，每次切页签都销毁实例：重读整个文件、重建编辑器与 Worker、重新解析并分页。第一版用 `v-show` 常驻实例解决了这一层，但往返仍会卡约 3 秒——重活其实散在另外四条路径上。
+### 技术栈
 
-| 根因 | 触发时机 | 修复 |
-|---|---|---|
-| `headings` computed 每次切页签跑全量 `marked.parse`；Office 页签的 md 枢纽内容可达 5 MB，解析结果还被丢弃 | 每次往返 2 次 | 按 `content` 引用缓存，Office 页签直接返回空大纲 |
-| `MdPreview` 全量解析 + 净化 + 按 48 KB 分片逐帧注入（5 MB ≈ 105 帧 ≈ 1.8 s） | Office ↔ 非 Office 往返，组件销毁重建 | 按文档缓存解析 / 净化结果，命中缓存一次注入 |
-| Word 的 `ResizeObserver` 隐藏期把视口高写成 0，恢复时触发全量分页 + DOM 实测块高逐轮收敛 | 每次切回 Office | 隐藏期不写 0、等值不写，`measure()` 跳过隐藏根节点 |
-| 保存后 `void updateFingerprint()` 未 await，下一轮 3 s 轮询把刚写盘的文件误判为外部变更 → 真重读 6 MB 并重建 Worker | 保存后切页签 | `await` 指纹基线；轮询在保存期间跳过 |
-
-现在 `PreviewPane.vue` 为每个访问过的 Office / PDF 页签保留一个宿主实例，切页签只做 CSS `display` 切换：不销毁 Worker、不重读盘、不重新解析、不重跑全文渲染。实例只在首次成为激活页签时创建（隐藏态首次挂载会把块高读成 0）；常驻集合内容未变时不赋新引用，`ref` 回调按路径缓存，避免全量 patch。`editable` / `theme` 由 props 驱动，`officeRev` / `pdfRev` 变化才重读磁盘。
-
-本机无头 Chrome 实测：全量 Markdown 渲染单次 **2 MB 167 ms / 5 MB 349 ms**（修复前一次往返要付 2 次）；两个常驻宿主连续四次往返切换 **7 / 32 / 33 / 33 ms**，文档根节点身份不变，0 报错；6.0 MB docx 隐藏→恢复 **26 ms**，对照 destroy + remount 为 57 ms。真实 Tauri 环境还省掉一次 6 MB IPC 读盘与 Worker 启动，差距更大。
-
-> 上限：实例数 = 打开过的 Office / PDF 页签数，未设 LRU，多开大文档内存线性增长；宿主一次读全量字节，峰值内存 ≈ 文件大小。保存后重建视图会重置光标 / 滚动位置。
-
----
-
-## 超大文本为什么不卡
-
-旧逻辑对超过 5 MB 的文本直接弹「文件过大，暂不支持预览」，71 MB 的 `.sql` 完全打不开。现在改为「大文件不拒绝、只读流式装载」：
-
-| 环节 | 做法 |
+| 层 | 技术 |
 |---|---|
-| 打开 | `entry.size > 5 MB` 时只建页签（`stream: true` + 指纹基线），正文不读、不进 `content`，避免整文件 JSON IPC 与全量 `innerHTML` |
-| 读盘 | Rust `read_file_range` 用 `File::seek` 跳到 offset，单次最多读 1 MB，返回 `tauri::ipc::Response` 原始字节 |
-| 解码 | `TextDecoder('utf-8')` 配 `decode(bytes, { stream: true })`，跨分片的多字节字符保留到下一块，收尾再 `decode()` 冲刷 |
-| 挂载 | 每 512 KB `view.dispatch` 追加一次，`setTimeout(0)` 让出主线程保证可滚动；跳过 Lezer 语法解析、补全、括号匹配与 history |
-| 防误写 | `readOnly` + `editable:false`；保存入口直接返回提示；刷新只自增 `streamRev` 触发从头重读，不重读全文进内存 |
+| 桌面框架 | Tauri 2（Rust：扫描 / 索引 / 搜索 / 配置 / AI 流式 / 网页导入 / 图片指纹 / 格式转换 / 字节区间读 / Craft 桥） |
+| 前端 | Vue 3 + Vite 6 + TypeScript |
+| Markdown | marked + DOMPurify + mermaid + markmap + KaTeX |
+| 编辑器 | CodeMirror 6（代码 / HTML / 流式只读）、内置 Office 内核 + Vue 视图（三格式）、pdfjs + pdf-lib（PDF） |
+| 字节通道 | 前端 `readFileBytes` / `readFileRange` / `writeFileBytes`（Tauri 原始字节，不过 JSON IPC） |
+| 进程外引擎 | gridcraft / wordcraft（纯 Rust，MCP stdio JSON-RPC sidecar） |
+| 图片 | `image` crate + dHash |
+| AI | `reqwest` SSE 流式代理 |
 
-本机无头 Chrome 实测：**6 MB / 71 MB SQL** 均完整装载（71 MB → 74,448,886 字符 / 744,490 行），分片边界处的 UTF-8 汉字「界」无替换符，进度条走完显示「加载完成」，只读态 `contenteditable=false`，0 控制台报错。同批验证 PPT 普通视图 4 张缩略图各自渲染不同页码、均有画布与缩放矩阵，切到幻灯片浏览后舞台隐藏、缩略图从 77px 放大到 154px，0 报错。
+### 三条数据链路
 
-> 边界：流式页签为只读，不能编辑、不写盘，也不参与查找 / 转格式 / AI 摘要；整份文本仍在 CodeMirror 文档树内，超大文件内存随体积线性增长；按 NUL 字节判二进制，含 NUL 的文本会被拦下。
+1. **前端字节链**（Office / PDF 主流程）：`readFileBytes` → Worker 内核解析 / 编辑 → `save()` 出 Uint8Array → `writeFileBytes` 覆盖原路径。Rust 只搬运字节，不参与文档语义。
+2. **Rust 枢纽链**（摘要 / 转换 / 检索）：`office.rs` 把 docx / xlsx / pptx / 旧二进制转 Markdown，供批量 AI 摘要、转格式矩阵与正文搜索抽取。
+3. **Craft sidecar 链**（重引擎能力）：前端 `core/craft.ts` → Tauri `craft_call` → `craft.rs` 长连接 → 子进程 MCP 工具面。子进程崩溃自动重连，请求不悬挂。
+
+Rust 命令共 43 个，分布在 `commands.rs`、`summary.rs`、`images.rs`、`convert/`、`craft.rs`、`web_import/`、`lib.rs`。
+
+### 目录结构
+
+```
+MdView
+├── src/
+│   ├── components/          # 页签、预览路由、编辑器、侧栏、AI、相似图片、各类弹窗
+│   │   ├── PreviewPane.vue       # 多格式预览 / 编辑路由 + 页签常驻 + 流式分支
+│   │   ├── OfficeEngineHost.vue  # 内置 Office 内核宿主（三格式共用）
+│   │   ├── PdfEditor.vue         # pdfjs 渲染 + pdf-lib 写回
+│   │   └── CodeEditor.vue / MdPreview.vue / MindmapView.vue / Sidebar.vue …
+│   ├── api.ts  store.ts  App.vue
+│   ├── office/                       # 内置 Office 内核 + Vue 视图（MIT，见 office/LICENSE）
+│   │   ├── core/  collab/  view/    # OOXML 解析 / 编辑 RPC / 富文本控制（core 约 58k 行）
+│   │   ├── core/font/               # 字体度量内核：fonts.wasm TS 封装 / 断行 / 禁则表
+│   │   ├── core/craft.ts            # Craft 双引擎前端桥（类型化通道）
+│   │   ├── components/              # 三套视图 + 共用画布 + Ribbon
+│   │   └── ribbon.ts  icons.ts      # 声明式工具条 + 图标表
+│   ├── utils/pdfEdit.ts             # PDF 文本层 / 增量写回纯逻辑
+│   └── __devtest__/                 # 开发期验证 harness
+├── src-tauri/src/
+│   ├── commands.rs  lib.rs  config.rs
+│   ├── office.rs        # Office↔Markdown 枢纽
+│   ├── craft.rs         # Craft sidecar 桥（MCP stdio JSON-RPC）
+│   ├── images.rs  summary.rs  convert/  web_import/
+│   └── vendor/          # gridcraft / wordcraft 引擎源码（独立构建，进程外）
+├── docs/                # 差距矩阵、检索与知识库设计、UI 稿
+└── assets/readme/       # README 视觉素材
+```
+
+工程纪律与逐阶段取证记录见 [`docs/onlyoffice-fidelity-gap.md`](docs/onlyoffice-fidelity-gap.md)（保真差距矩阵与路线图）。
+
+---
+
+## 对比业界
+
+### 定位差异
+
+MdView 不替代完整 Office 套件（无宏、协作 UI 未接、高级图表受限），它的生态位是：**本地资料库工作流 + Office 级保真的轻量编辑 + 真实 OOXML 写回**，且文件内容不出本机。
+
+### 横向对比
+
+| 项目 | 许可证 | 形态 | Office 保真路径 | OOXML 真实写回 | 运行重量 |
+|---|---|---|---|---|---|
+| **MdView** | AGPL-3.0 | Tauri 2 本地桌面 | TS 内核自算排版（fonts.wasm 逐字簇度量） | ✅ 原文件覆盖写回，未触碰部件字节恒等 | 单机零服务器，安装包级 |
+| OnlyOffice | AGPL-3.0 | Web 套件 + 桌面编辑器 | sdkjs（TS/C++）自算 | ✅ | 协作需 DocumentServer |
+| Collabora Online | MPL-2.0 | Web（LOKit WASM） | LibreOffice C++ 整编 WASM | ✅ | 服务器 + 数十 MB WASM 首屏 |
+| Univer | Apache-2.0 | 可嵌入 SDK / Web | 自有快照数据模型 | △ OOXML 走导入 / 导出转换 | npm 依赖体系 |
+| Luckysheet | MIT | Web 画布表格 | 自有 JSON 模型 | △ 经 LuckyExcel 导出 | 单前端库 |
+| SheetJS (CE) | Apache-2.0 | 解析库 | 无渲染层 | 解析 / 写出，CE 不求值公式 | npm 库 |
+| mammoth.js | BSD-2 | docx→HTML 转换 | 语义化转换，设计性丢弃版式 | ❌ 只读 | npm 库 |
+| Obsidian | 闭源免费 | Electron 知识库 | Office 靠插件只读预览（docx-preview 等） | ❌ | 客户端，Electron 体积 |
+
+### MdView 的具体优势
+
+1. **自算排版，精度可控**：与 ONLYOFFICE sdkjs 同路线——行宽、断行、分页、分栏、列宽结算全部内核自算，不借浏览器原生排版（mammoth / docx-preview 一类转换方案版式即丢），也不把整套 C++ 编进 WASM（Collabora 数十 MB 首屏）。字体度量用 FreeType + HarfBuzz wasm（3.6MB）逐字簇 shaping，连字 / kerning 与实渲对齐。
+2. **真实 OOXML 写回，不是导入导出**：编辑即修改原文件的部件（styles / drawings / charts / pivot 都是标准 part），未触碰内容字节恒等；存回后真 Office / WPS 打开无损。自有模型类产品（Univer / Luckysheet）的 OOXML 往返必然经过一次有损转换。
+3. **本地优先**：文件内容不上传、零遥测、离线完整可用；对比需要 DocumentServer / COOL 服务器的 Web 套件。
+4. **零运行时外部依赖**：Office 内核是仓库内 TS 源码 + Vue DOM 视图，无 React、无 CDN、无 npm Office 包——审计面与升级面都收敛在自己手里。
+5. **比 Electron 轻**：Tauri 2 + Rust 壳，内存与包体显著小于同类桌面方案（Obsidian / OnlyOffice 桌面编辑器）。
+6. **双引擎储备**：gridcraft / wordcraft 两个纯 Rust clean-room 引擎经 sidecar 桥就位（514 函数 / 透视 / 图表 / 排版内核），TS 轨与 Craft 轨并存，重能力按需接入而非推倒重写。
+7. **工作流完整度**：Office 之外还覆盖 PDF 增量编辑（原字体 / 墨色 / 基线只重绘变化字符）、Markdown 枢纽转格式矩阵、dHash 相似图片、链接文章导入、可选 AI 摘要——是「资料库工作台」，不是单点查看器。
 
 ---
 
@@ -256,102 +264,43 @@ readFileBytes → pdfjs 单页渲染 + 文本层命中框（记录字体族 / �
 ```bash
 npm install
 npm run app:dev      # 开发模式，热更新
-npm run app:build    # 打包发布
+npm run app:build    # 打包发布（macOS .app/.dmg，Windows .msi）
 ```
 
 | 命令 | 作用 |
 |---|---|
 | `npm run dev` | 仅启动 Vite 前端 |
-| `npm run build` | `vue-tsc --noEmit` + `vite build`，产物 `dist/` |
-| `npm run preview` | 预览前端构建 |
-| `npm run app` | tauri CLI 入口 |
-| `npm run app:dev` | 桌面开发模式 |
-| `npm run app:build` | 桌面打包 |
+| `npm run build` | `vue-tsc --noEmit` + `vite build` |
+| `npm run app:dev` / `app:build` | 桌面开发 / 打包 |
 
-桌面包位于 `src-tauri/target/release/bundle/`，当前版本 **1.1.0**（macOS 产出 `.app` / `.dmg`，Windows 产出 `.msi`）。版本号在 `src-tauri/Cargo.toml` 与 `package.json` 各有一处，后者用于侧栏显示。
+桌面包位于 `src-tauri/target/release/bundle/`，当前版本 **1.1.0**。Windows 构建须在 Windows 主机执行（MSVC 工具链 + WebView2 运行时）；未签名 `.msi` 首次运行会被 SmartScreen 拦截，配置 `TAURI_SIGNING_PRIVATE_KEY` 后打包可消除。
 
-### Windows 打包
+Craft sidecar 需单独构建两个 vendored 引擎（各自独立 Cargo 树）：
 
-Tauri 2 的 Windows 构建必须在 Windows 主机或 Windows CI 上执行——macOS / Linux 无法交叉编译出可执行文件（需 MSVC 工具链与 WebView2 运行时）。
-
-环境：Node.js ≥ 20、Rust 工具链（`stable-msvc`）、[Visual Studio 生成工具](https://visualstudio.microsoft.com/zh-hans/downloads/) 勾选「使用 C++ 的桌面开发」、[WebView2 运行时](https://developer.microsoft.com/zh-cn/microsoft-edge/webview2/)（Windows 11 已内置）。
-
-```powershell
-npm install
-npm run app:build
+```bash
+cd src-tauri/vendor/gridcraft && cargo build --release   # 产出 gridcraft-cli
+cd src-tauri/vendor/wordcraft && cargo build --release   # 产出 wordcraft-cli
 ```
 
-产物位于 `src-tauri/target/release/bundle/msi/`。`tauri.conf.json` 的 `bundle.targets` 是全局的 `["dmg", "app", "msi"]`，无按平台覆盖段；需要 `.exe` 安装器可把 `"nsis"` 加入该数组。
-
-未签名的 `.msi` 首次运行会被 SmartScreen 拦截。如需消除警告，准备代码签名证书后设置 `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 再打包。
-
----
-
-## 技术栈
-
-| 层 | 技术 |
-|---|---|
-| 桌面框架 | Tauri 2（Rust：文件扫描 / 索引 / 搜索 / 配置 / AI 流式 / 网页导入 / 图片指纹 / 格式转换 / 字节区间读取） |
-| 前端 | Vue 3 + Vite 6 + TypeScript |
-| Markdown | marked + DOMPurify + mermaid + markmap |
-| 编辑器 | CodeMirror 6（代码 / HTML / 超大文本流式只读）、textarea（Markdown）、内置 Office 内核 + Vue 3 视图（Office 三格式）、pdfjs + pdf-lib（PDF） |
-| Office / PDF 读写 | 前端 `readFileBytes` / `readFileRange` / `writeFileBytes` 原始字节通道；Rust `office.rs` 的 Office↔Markdown 枢纽供摘要 / 转换 / 检索抽取 |
-| PDF | `pdfjs-dist` 渲染 / 文本层 / 内嵌字体与图片提取、扫描件识别、墨色采样；`pdf-lib` 最小覆盖叠加改动并覆盖写回 |
-| 图片 | `image` crate + dHash（Rust 端索引） |
-| AI | `reqwest` SSE 流式代理，OpenAI 兼容 `chat/completions` |
-
-Rust 命令分散在 `commands.rs`、`summary.rs`、`images.rs`、`convert/commands.rs`、`web_import/`、`lib.rs`，共 40 个；Office 主流程只用到 `read_file_as_bytes` / `write_file_bytes` / `read_office_md`，超大文本流式预览走 `read_file_range`。
-
-### 目录结构
-
-```
-MdView
-├── src/
-│   ├── components/          # 页签、预览路由、编辑器、侧栏、AI、相似图片、各类弹窗
-│   │   ├── PreviewPane.vue       # 多格式预览 / 编辑路由 + Office 页签常驻 + 超大文本流式分支
-│   │   ├── OfficeEngineHost.vue  # 内置 Office 内核宿主（三格式共用）
-│   │   ├── PdfEditor.vue         # PDF 编辑器（pdfjs 渲染 + pdf-lib 写回）
-│   │   ├── MdPreview.vue / MindmapView.vue
-│   │   ├── CodeEditor.vue        # CodeMirror：常规编辑 + 超大文本字节区间流式只读
-│   │   └── BinaryViewer.vue / AiDrawer.vue / SimilarImages.vue / Sidebar.vue
-│   ├── api.ts  store.ts  App.vue
-│   ├── office/                       # 内置 Office 内核 + Vue 视图（MIT，见 LICENSE）
-│   │   ├── core/  collab/  view/    # OOXML 解析 / 编辑 RPC / 富文本控制逻辑
-│   │   ├── core/font/               # 字体度量内核：fonts.wasm TS 封装 / 断行 / 禁则表
-│   │   ├── components/              # Word / Excel / PPT 三套 Vue 视图 + 共用幻灯片画布 OfficeSlideCanvas + OfficeIcon + Ribbon 工具条
-│   │   ├── ribbon.ts  icons.ts       # 声明式工具条配置 + 图标路径表
-│   │   ├── client.ts  docx-render.ts  media.ts  office-views.css
-│   ├── utils/pdfEdit.ts                 # PDF 文本层 / 图片提取 / 增量写回纯逻辑
-│   ├── utils/  styles/  composables/useWrap.ts   # 自动换行全局偏好
-│   ├── docx/  pptx/  vendor/genoffice/   # 旧引擎封装，已不接主流程
-│   └── __devtest__/                     # 开发期验证 harness
-├── src-tauri/src/
-│   ├── commands.rs  lib.rs  config.rs
-│   ├── office.rs        # Office↔Markdown 枢纽 + 转换（3184 行）
-│   ├── images.rs        # dHash 相似图片索引
-│   ├── summary.rs       # 批量 AI 摘要 + 缓存
-│   ├── convert/         # 转格式矩阵与序列化
-│   └── web_import/      # 链接抓取、正文提取、资源本地化、视频号
-├── docs/                # 检索方案、知识库设计、GenOffice 支持计划、UI 稿
-├── scripts/             # 旧引擎验证 harness
-└── assets/readme/       # README 视觉素材
-```
-
----
+也可用环境变量 `MDVIEW_GRIDCRAFT_BIN` / `MDVIEW_WORDCRAFT_BIN` 指向任意位置的二进制。未构建 sidecar 时应用照常运行，Craft 通道报错上抛、不影响主流程。
 
 ## 已知边界
 
-- **检索**：为逐文件 `contains` 扫描，无倒排索引、无向量库。「语义检索」实为 AI 摘要文本的子串命中，不是 embedding。`docs/lancedb-hybrid-search-plan.md`（LanceDB + bge-m3）与 `docs/knowledge-base-design.md`（SQLite FTS5，暂不做向量）两份设计并存，**均未落地**。`embedding_profile` / `vlm_profile` 仅为配置占位。
-- **AI**：无批量打标命令；PDF 不支持摘要；md → PDF 导出为位图、文字不可选。
-- **旧版二进制格式**：`.doc` / `.xls` / `.ppt` 及其模板（`.dot` / `.xlt` / `.pot` / `.pps`）由纯前端内核解析 CFB 复合文档后转 OOXML 打开，可预览可编辑；OOXML 模板（`.dotx` / `.xltx` / `.potx` / `.ppsx`）、ODF（`.odt` / `.ods` / `.odp` 及模板 / flat XML 变体）、RTF 同样走 Office 引擎。Word 6.0 / 95 及更早版本不支持；`.doc` 编辑保存后内容为 OOXML（按内容嗅探打开）。Rust 枢纽读 `.doc` 成 Markdown 仍会失败，调用处已吞掉，不影响预览。
-- **PDF 编辑**：覆盖式文字编辑，不做版式重排；只有变化的字符被白块遮住并以位图重绘，未改动字符仍是原矢量文字，被遮的旧字符仍留在文本层（复制全文会带出）；标准 14 字体 / Type3 等未注册字体回退到系统中文字体，字形与原文档会有差异；「页面图片」只提取当前页；扫描件只读；无 OCR / 全文索引。
-- **自动换行**：右键菜单替换了编辑器区系统菜单（复制 / 粘贴仍用 `Ctrl/⌘+C / V`）；Excel 单元格换行仍由 Ribbon 的格式命令控制，属于单元格属性而非软换行；PDF 页面画布本身不含文本行。
-- **压缩包**：明确不支持预览。
-- **体积上限**：常规文本全量可编辑上限 5MB（超过自动转流式只读预览，不拒绝打开）；索引深度 6、搜索深度 12、图片分组比较上限 3000。流式页签只读、不参与查找 / 转格式 / AI 摘要，详见「超大文本为什么不卡」。
-- **Office / PDF 内核**：实例未设 LRU，多开大文档内存线性增长；宿主一次读全量字节；保存后重建视图会重置光标 / 滚动位置。`pdfjs-dist` 4.10.38 仍依赖 ES2024 `Promise.withResolvers`，Safari 17.4 / Chrome 119 之前的 WebView 需自行 polyfill。
-- **旧代码**：`DocToolbar.vue`、`DocxInlineEditor.vue`、`OfficeSheetEditor.vue`、`PptxInlineEditor.vue`、`UniverDocEditor.vue` / `UniverSlideEditor.vue`、`src/docx`、`src/pptx`、`src/vendor/genoffice` 及若干旧 Tauri 命令已不接主流程，保留作回退参考；仓库内 `dist/` 为旧构建快照。
-- AI 凭证需由用户在设置中自行配置与核对，密钥不存于应用外。
+- **检索**：逐文件 `contains` 扫描，无倒排索引 / 向量库；「语义检索」是 AI 摘要文本的子串命中
+- **Office**：Word 修订作者单一、页眉页脚编辑仅文本行、分栏光标段落级；PPT 文本编辑按段落重建、编辑态与显示态逐 run 同构渲染，但**提交后多 run 塌缩为首 run 格式**（内核 `setShapeText` 既有语义，逐 run 持久化留 PptxEditor 接入升级路径）、SmartArt 为节点树降级渲染、形状布尔运算未做；Excel 的图表 / 条件格式 / 透视 / 序列的交互元数据存于私有 sidecar part，真实 Office 另存会丢弃（标准 part 不受影响）；`.doc` 编辑保存后内容为 OOXML；Word 6.0 / 95 及更早不支持。三件套的 Ctrl+F 打开当前文档查找栏；多页签常驻的隐藏实例不抢键盘焦点；Word 格式刷与表格跨格删除、PPT 浏览/放映视图的键盘语义已按桌面版对齐
+- **macOS 撤销**：原生菜单不提供 Undo/Redo 项（Tauri 默认菜单的预定义项会在 `performKeyEquivalent:` 阶段截走 ⌘Z/⇧⌘Z 交给 NSUndoManager，画布与自维护历史拿不到键）——三视图撤销重做统一走 JS 键盘链（⌘Z / ⇧⌘Z / ⌘Y）
+- **Craft sidecar**：视图层消费逐步推进，当前主流程仍走 TS 内核
+- **PDF**：覆盖式文字编辑不做版式重排；被白块遮的旧字符仍在文本层（复制全文会带出）；扫描件只读；无 OCR
+- **体积**：常规文本可编辑上限 5 MB（超出转流式只读，不拒绝打开）；流式页签不参与查找 / 转格式 / AI；Office / PDF 页签实例未设 LRU，多开大文档内存线性增长
+- **压缩包**：不支持预览
+- **兼容**：`pdfjs-dist` 4.10.38 依赖 ES2024 API，旧 WebView 需 polyfill；macOS 上 Ctrl+click 归系统右键，加选统一 ⌘
+- **旧代码**：`src/docx`、`src/pptx`、`src/vendor/genoffice` 及若干旧编辑器已不接主流程，保留作回退参考
+- AI 凭证由用户在设置中自行配置，密钥不离开本机
 
 ## License
 
-[MIT](./LICENSE)
+仓库根的 [`LICENSE`](./LICENSE) 为 **AGPL-3.0**。选此许可的理由是具体的：本项目的高保真内核逐式移植自 ONLYOFFICE sdkjs，而 sdkjs 本身是 AGPL-3.0——派生作品以 AGPL 收敛是不留后路的保守解。
+
+内置 Office 内核 `src/office/` 中的第三方派生段单独以 MIT 子许可（见 [`src/office/LICENSE`](src/office/LICENSE)），vendored 的 gridcraft / wordcraft 各自保留 MIT OR Apache-2.0 双许可声明；整仓仍按 AGPL-3.0 分发。
+
+**作为桌面应用的含义**：AGPL-3.0 的远程网络交互条款（§13）只在软件通过网络向远端用户提供交互时触发。MdView 是本地桌面程序、文件内容不上传，正常分发形态下与 GPLv3 行为一致；若日后作为网络服务对外提供交互界面，则须按 §13 向远端用户开放完整源代码。

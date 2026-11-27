@@ -22,6 +22,10 @@ const props = defineProps<{
   zoom: number
   editable: boolean
   sel: { r: number; c: number }
+  /** 本表批注（视图从 comments.list 过滤而来）：右上角红三角角标 */
+  comments: { r: number; c: number; text: string }[]
+  /** ribbon「隐藏批注」开关：勾上即整层角标不渲染（报障⑦的真实消费点） */
+  commentHidden: boolean
 }>()
 const emit = defineEmits<{
   (e: 'validationSelect', value: string): void
@@ -130,6 +134,19 @@ const condOverlays = computed<Overlay[]>(() => {
   return out
 })
 
+// ---------------------------------------------------------------- comments (报障⑦)
+interface CommentMark { key: string; style: Record<string, string>; text: string }
+const commentMarks = computed<CommentMark[]>(() => {
+  if (props.commentHidden) return []
+  const out: CommentMark[] = []
+  for (const m of props.comments) {
+    const cell = props.cells.find((c) => c.r === m.r && c.c === m.c)
+    if (!cell) continue // 批注落在隐藏行/可视区外：不渲染角标
+    out.push({ key: `cm-${m.r}-${m.c}`, text: m.text, style: { left: cell.left + cell.w - 9 + 'px', top: cell.top + 'px' } })
+  }
+  return out
+})
+
 // ---------------------------------------------------------------- validation (self-drawn dropdown)
 const valRule = computed(() => listRuleAt(props.features.validations ?? [], props.sel.r, props.sel.c))
 const valCell = computed(() => props.cells.find((c) => c.r === props.sel.r && c.c === props.sel.c))
@@ -176,6 +193,15 @@ function pickVal(v: string) { valOpen.value = false; emit('validationSelect', v)
         >{{ v }}</button>
       </div>
     </div>
+    <!-- 批注角标：可视区内的批注格右上角红三角，悬停看正文；「隐藏批注」整层关掉 -->
+    <div
+      v-for="m in commentMarks"
+      :key="m.key"
+      class="ov-feat-comment-mark"
+      :style="m.style"
+      :title="m.text"
+      :data-comment-at="m.key"
+    ></div>
     <button
       v-if="editable && valRule && valCell"
       class="ov-feat-val-trigger"

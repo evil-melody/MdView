@@ -25,13 +25,20 @@ const props = defineProps<{
   playSeq?: number
   /** 演示模式进入当前页时的切换效果类（ov-trans-fade 等） */
   transCls?: string
+  /** 形状文本编辑态（PptxEditor 驱动）：i = 编辑中的形状索引，html = 带
+   *  data-pa/data-o 光标契约的编辑层初帧；null = 无编辑。画布只管渲染与上报，
+   *  编辑生命周期（begin/attach/commit）在父组件 composables/usePptxTextEdit */
+  textEditing?: { i: number; html: string } | null
 }>()
 const emit = defineEmits<{
   (e: 'select', i: number, additive: boolean): void
   (e: 'selectSet', ids: number[]): void
   (e: 'clear'): void
   (e: 'transform', changes: { i: number; box: Box }[]): void
-  (e: 'commit', p: { i: number; el: Extract<SlideEl, { t: 'shape' }>; lines: string[] }): void
+  (e: 'textEdit', i: number): void
+  (e: 'textMount', el: HTMLElement | null): void
+  (e: 'textBlur'): void
+  (e: 'textKey', ev: KeyboardEvent): void
   (e: 'cellEdit', p: { i: number; ri: number; ci: number }): void
   (e: 'commitCell', p: { i: number; ri: number; ci: number; lines: string[] }): void
   (e: 'commitDgm', p: { i: number; nodeId: string; lines: string[] }): void
@@ -61,7 +68,8 @@ function runCss(r: TRun): string {
   return out.join(';')
 }
 
-function paraHtml(p: TPara): string {
+/** edit=true：编辑层同构渲染——去装饰（项目符号不属于文本、超链接扁平为 span 让点击落光标） */
+function paraHtml(p: TPara, edit = false): string {
   const style = [`text-align:${p.algn}`]
   if (p.marL) style.push(`padding-left:${p.marL}px`)
   if (p.indent) style.push(`text-indent:${p.indent}px`)
@@ -72,13 +80,13 @@ function paraHtml(p: TPara): string {
   if (!p.runs.length || p.runs.every((r) => !r.text && !r.br)) style.push(`font-size:${p.endSz}pt`)
 
   const hang = p.indent < 0 ? -p.indent : 0
-  const bullet = p.bullet
+  const bullet = !edit && p.bullet
     ? `<span class="ov-slide-bul" style="min-width:${hang || 0}px;padding-right:${hang ? 0 : 0.4}em;font-size:${p.bullet.sz}pt;${p.bullet.color ? `color:${p.bullet.color};` : ''}${p.bullet.font ? `font-family:${p.bullet.font};` : ''}">${esc(p.bullet.text)}</span>`
     : ''
   const runs = p.runs
     .map((r) => {
       if (r.br) return '<br>'
-      const href = safeHref(r.href)
+      const href = edit ? undefined : safeHref(r.href)
       const span = `<span style="${runCss(r)}">${esc(r.text)}</span>`
       return href ? `<a href="${esc(href)}" target="_blank" rel="noreferrer noopener" style="color:inherit">${span}</a>` : span
     })
@@ -86,9 +94,10 @@ function paraHtml(p: TPara): string {
   return `<div class="ov-slide-para" style="${style.join(';')}">${bullet}${runs || '&#8203;'}</div>`
 }
 
-function bodyHtml(body: TextBody): string {
+function bodyHtml(body: TextBody, edit = false): string {
   if (body.empty) return ''
-  return body.paras.map(paraHtml).join('')
+  // 必须显式传 edit：map 会把下标当第二实参喂给 paraHtml（非零下标会被误判为编辑层）
+  return body.paras.map((p) => paraHtml(p, edit)).join('')
 }
 
 /** bodyPr：内边距、垂直锚点、竖排。静态布局在 office-views.css，这里只给动态值 */
@@ -114,34 +123,32 @@ function shapePath(el: Extract<SlideEl, { t: 'shape' }>, b: Box): string {
 }
 
 /** ---------- 表格单元格就地编辑（自绘 contenteditable，不用原生 input） ---------- */
-interface CellRef { i: number; ri: number; ci: number }
+interface CellRef { i: number; ri: number; ci: number; html: string }
 const cellEdit = ref<CellRef | null>(null)
 const dgmEdit = ref<{ i: number; nodeId: string } | null>(null)
-/** 形状文本就地编辑：仅编辑态挂载 contenteditable，进入时快照纯文本节点，退出即摘，
- *  避免 v-html re-render 重建 DOM 丢光标，也消除编辑态注入面。 */
-const textEdit = ref<{ i: number; initial: string } | null>(null)
+/** 形状文本编辑态由父组件的 PptxEditor 驱动（props.textEditing）：画布只渲染
+ *  编辑层（带 data-pa/data-o 契约的 html 由 usePptxTextEdit 生成并随编辑重建），
+ *  编辑元素挂载后经 textMount 上报，让父组件把 RichInput 挂到真实 DOM 上。 */
+function onTextRef(node: unknown) {
+  emit('textMount', (node as HTMLElement | null) ?? null)
+}
 
-function startCellEdit(i: number, ri: number, ci: number) {
+function startCellEdit(i: number, ri: number, ci: number, body?: TextBody) {
   if (!live.value || !props.editable) return
-  cellEdit.value = { i, ri, ci }
+  cellEdit.value = { i, ri, ci, html: body ? bodyHtml(body, true) : '' }
   emit('cellEdit', { i, ri, ci })
 }
 function cancelCellEdit() { cellEdit.value = null }
 function cancelDgmEdit() { dgmEdit.value = null }
 function commitCell(i: number, ri: number, ci: number, ev: Event) {
-  const lines = ((ev.currentTarget as HTMLElement).innerText || '').replace(/\r/g, '').split('\n')
+  const lines = editLines(ev.currentTarget as HTMLElement)
   cellEdit.value = null
   emit('commitCell', { i, ri, ci, lines })
 }
-/** TextBody → 纯文本（编辑器初始内容；br 视作换行） */
-function plainText(body: TextBody): string {
-  return body.paras.map((p) => p.runs.map((r) => (r.br ? '\n' : r.text)).join('')).join('\n')
-}
-/** 编辑层样式：取首个非空 run 的字体/字号/颜色/粗斜体，编辑中不再回退默认小号黑字；
- *  pre-wrap 保换行与连续空格（contenteditable 默认 white-space 会吞缩进）。 */
-function editTextStyle(body?: TextBody): string {
-  const run = body?.paras.flatMap((p) => p.runs).find((r) => r.text && !r.br)
-  return `${run ? runCss(run) + ';' : ''}white-space:pre-wrap`
+/** 提交前清洗编辑层文本：空段占位的 ZWSP 剥离；浏览器换行容器（div/p）折算为 \n。
+ *  innerText 已对块级子元素产生换行，这里只兜底 textContent 路径与 ZWSP。 */
+function editLines(root: HTMLElement): string[] {
+  return (root.innerText || '').replace(/\u200B/g, '').replace(/\r/g, '').split('\n')
 }
 /** contenteditable 自动聚焦（ref 回调在挂载后触发） */
 function focusEl(node: unknown) {
@@ -153,18 +160,11 @@ function onEditKey(ev: KeyboardEvent, cancel: () => void) {
   if (ev.key === 'Escape') { ev.preventDefault(); cancel() }
 }
 
-/** ---------- 形状文本就地编辑：双击进入、单击选中、拖动搬移三者互不冲突 ---------- */
+/** ---------- 形状文本就地编辑：双击进入（父组件 PptxEditor 接管）、
+ *  单击选中、拖动搬移三者互不冲突 ---------- */
 function startTextEdit(i: number, el: Extract<SlideEl, { t: 'shape' }>) {
   if (!canEdit(el)) return
-  textEdit.value = { i, initial: el.text ? plainText(el.text) : '' }
-}
-function cancelTextEdit() { textEdit.value = null }
-function onTextEditKey(i: number, el: Extract<SlideEl, { t: 'shape' }>, ev: KeyboardEvent) {
-  if (ev.key === 'Escape') { ev.preventDefault(); cancelTextEdit() }
-  else if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) {
-    ev.preventDefault()
-    commit(i, el, ev.currentTarget as HTMLElement)
-  }
+  emit('textEdit', i)
 }
 
 /** ---------- SmartArt 节点就地编辑 ---------- */
@@ -352,14 +352,6 @@ async function hydrate() {
 
 function canEdit(el: Extract<SlideEl, { t: 'shape' }>): boolean {
   return live.value && !!props.editable && !!el.text
-}
-
-function commit(i: number, el: Extract<SlideEl, { t: 'shape' }>, target: HTMLElement) {
-  // textEdit 不在（已被 Esc 取消或别的形状在编辑）时不提交，避免 blur 误写回
-  if (!canEdit(el) || textEdit.value?.i !== i) return
-  const lines = (target.innerText || '').replace(/\r/g, '').split('\n')
-  textEdit.value = null
-  emit('commit', { i, el, lines })
 }
 
 /** ---------- 形状级交互：拖动 / 缩放手柄 ---------- */
@@ -601,7 +593,7 @@ function onElDown(i: number, ev: PointerEvent) {
   if (isMac && ev.ctrlKey && !ev.metaKey) return
   // 编辑态内只处理选字（edit div 已 .stop 吞掉 pointerdown，这里是兜底），不启动拖动；
   // 非编辑态统一走形状 move —— 文字层已 pointer-events:none，不会抢走手势。
-  if (textEdit.value && textEdit.value.i === i) return
+  if (props.textEditing?.i === i) return
   // mac 上 Ctrl+click 是系统右键：加选只认 ⌘ / Shift，避免与右键菜单同时触发
   if (ev.metaKey || ev.shiftKey || (ev.ctrlKey && !isMac)) { emit('select', i, true); return }
   if (!(props.selEls ?? []).includes(i)) emit('select', i, false)
@@ -707,7 +699,6 @@ watch(() => props.slide, () => {
   animState.value = null
   cellEdit.value = null
   dgmEdit.value = null
-  textEdit.value = null
   measure()
   void hydrate()
 })
@@ -787,18 +778,22 @@ watch(interactive, (v) => {
             :alt="''"
           />
           <template v-if="el.text">
-            <!-- 编辑态：contenteditable + 纯文本节点（退出即摘），不复用 v-html，避免 re-render 丢光标 / 注入面 -->
+            <!-- 编辑态：contenteditable + 逐 run 富结构（编辑层 html 由父组件
+                 usePptxTextEdit 生成，带 data-pa/data-o 光标契约），退出即摘。
+                 编辑期间模型刷新不重写本层 DOM：html 只在内核 replace 后重建。 -->
             <div
-              v-if="textEdit && textEdit.i === i"
+              v-if="textEditing && textEditing.i === i"
               class="ov-slide-text ov-slide-text-edit"
-              :style="[textBoxStyle(el.text), editTextStyle(el.text)]"
+              :class="{ 'ov-slide-nowrap': !el.text.wrap }"
+              :style="textBoxStyle(el.text)"
               contenteditable="true"
               spellcheck="false"
-              :ref="focusEl"
-              @blur="commit(i, el, $event.currentTarget as HTMLElement)"
-              @keydown="onTextEditKey(i, el, $event)"
+              :ref="onTextRef"
+              v-html="textEditing.html"
+              @blur="emit('textBlur')"
+              @keydown="emit('textKey', $event)"
               @pointerdown.stop
-            >{{ textEdit.initial }}</div>
+            ></div>
             <!-- 非编辑态：渲染富文本；文字层恒 pointer-events:none，让 move 手势落到形状本体 -->
             <div
               v-else
@@ -950,19 +945,21 @@ watch(interactive, (v) => {
                     :colspan="cell.colSpan > 1 ? cell.colSpan : undefined"
                     :rowspan="cell.rowSpan > 1 ? cell.rowSpan : undefined"
                     :style="cellStyle(cell, row.h)"
-                    @dblclick.stop="startCellEdit(i, ri, ci)"
+                    @dblclick.stop="startCellEdit(i, ri, ci, cell.text)"
                   >
                     <div
                       v-if="cellEdit && cellEdit.i === i && cellEdit.ri === ri && cellEdit.ci === ci"
-                      class="ov-cell-edit"
-                      :style="editTextStyle(cell.text)"
+                      class="ov-cell-edit ov-slide-text ov-slide-flow"
+                      :class="{ 'ov-slide-nowrap': cell.text && !cell.text.wrap }"
+                      :style="cell.text ? textBoxStyle(cell.text) : undefined"
                       contenteditable="true"
                       spellcheck="false"
                       :ref="focusEl"
+                      v-html="cellEdit.html"
                       @blur="commitCell(i, ri, ci, $event)"
                       @keydown="onEditKey($event, cancelCellEdit)"
                       @pointerdown.stop
-                    >{{ cell.text && !cell.text.empty ? plainText(cell.text) : '' }}</div>
+                    ></div>
                     <div
                       v-else-if="cell.text"
                       class="ov-slide-text ov-slide-flow"

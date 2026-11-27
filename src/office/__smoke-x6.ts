@@ -86,7 +86,7 @@ const EXPECT: { id: string; label: string; groups: [string, string[]][] }[] = [
   ]},
   { id: 'insert', label: '插入', groups: [
     ['表格', ['数据透视表', '建议的数据透视表', '表格', '迷你图', '切片器', '日程表']],
-    ['插图', ['图片', '形状', '图标', '3D 模型', 'SmartArt', '筛选截图', '建议图表', '地图', '数据透视图']],
+    ['插图', ['图片', '形状', '图标', '3D 模型', 'SmartArt', '筛选截图', '建议图表', '地图', '数据透视图', '插入图表']],
     ['链接', ['链接']],
     ['文本', ['批注', '新建注释', '文本框', '页眉和页脚', '对象', '公式']],
     ['符号', ['符号']],
@@ -106,11 +106,11 @@ const EXPECT: { id: string; label: string; groups: [string, string[]][] }[] = [
     ['计算', ['监视窗口', '计算选项', '立即计算', '计算工作表']],
   ]},
   { id: 'data', label: '数据', groups: [
-    ['获取数据', ['获取数据', '全部刷新', '属性', '查询和连接', '工作簿连接']],
+    ['获取数据', ['获取数据', '全部刷新', '属性', '查询和连接', '工作簿连接', '刷新图表', '刷新透视表', '刷新序列']],
     ['排序和筛选', ['排序', '筛选', '清除']],
     ['数据工具', ['数据验证', '合并', '取消合并', '汇总']],
     ['数据分析', ['数据透视表', '分析工具', '组合', '取消组合']],
-    ['汇总', ['分类汇总', '隐藏', '拆分工具']],
+    ['汇总', ['分类汇总', '隐藏', '拆分工具', '大纲级别']],
   ]},
   { id: 'review', label: '审阅', groups: [
     ['校对', ['拼写', '同义词', '工作簿统计信息']],
@@ -156,7 +156,7 @@ function structureAsserts(tabs: Tab[]): Record<string, boolean> {
   out.buttonLabelsMatch = labelsOk
   out.buttonOrderMatch = orderOk
   const total = tabs.reduce((n, t) => n + t.groups.reduce((m, g) => m + buttonsOf(g.items).length, 0), 0)
-  out.buttonTotalIs193 = total === 193
+  out.buttonTotalIs193 = total === 198 // 原 193 + 插图组插入图表 1 + 获取数据组三类刷新 3 + 汇总组大纲级别 1
   return out
 }
 

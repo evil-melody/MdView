@@ -74,6 +74,18 @@
 .ov-feat-slicer-btn:hover { border-color: var(--accent, #5b6ee1); }
 .ov-feat-slicer-on { background: var(--accent, #5b6ee1); border-color: var(--accent, #5b6ee1); color: #fff; font-weight: 600; }
 
+/* 批注角标（报障⑦）：格右上角小三角，悬停 title 显示正文；「隐藏批注」开关由
+   OfficeSheetFeatureLayer 的 commentMarks 计算属性控制（隐藏 = 不渲染）。 */
+.ov-feat-comment-mark {
+  position: absolute;
+  width: 0;
+  height: 0;
+  border-top: 8px solid #c0392b;
+  border-right: 8px solid transparent;
+  pointer-events: auto;
+}
+.ov-feat-comment-mark:hover { border-top-color: #e74c3c; }
+
 .ov-feat-val-trigger {
   position: absolute;
   width: 16px;

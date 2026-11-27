@@ -1,4 +1,5 @@
 /** Geometry in px (96 dpi, EMU/9525); font sizes in pt. */
+import type { DocComment } from '../comments'
 
 export type Fill =
   | { t: 'solid'; c: string }
@@ -132,7 +133,7 @@ export type SlideEl = (
   | { t: 'smartart'; box: Box; nodes: SmartArtNode[]; links: [string, string][] }
   | { t: 'chart'; box: Box; data: ChartData }
   | { t: 'placeholder'; box: Box; label: string }
-) & { top?: number; /** 该形状首个动画效果 preset（p:timing）；多效果见 SlideModel.animSeq */ anim?: string }
+) & { top?: number; /** 元素自身 OOXML id（组内子形状 = 子 id，顶层 = 与 top 同值）；格式/锚/动画按此精确命中 */ oid?: number; /** 该形状首个动画效果 preset（p:timing）；多效果见 SlideModel.animSeq */ anim?: string }
 
 /** 'text', 'line', 'image' or any DrawingML preset geometry name (rect, ellipse, star5, chevron…) */
 export type ShapeKind = 'text' | 'line' | 'image' | (string & {})
@@ -144,8 +145,8 @@ export type ShapeOp =
   | { op: 'line'; top: number; color?: string | null; w?: number; dash?: string }
   | { op: 'order'; top: number; to: 'front' | 'back' | 'forward' | 'backward' }
   | { op: 'duplicate'; top: number; dx?: number; dy?: number }
-  /** vertical text anchor of a text shape (by shape id) */
-  | { op: 'anchor'; sid: number; anchor: 't' | 'ctr' | 'b' }
+  /** vertical text anchor：按顶层元素 id 定位；sp / 组内形状写 a:bodyPr@anchor，表格 graphicFrame 写全部 a:tcPr@anchor */
+  | { op: 'anchor'; top: number; anchor: 't' | 'ctr' | 'b' }
   /** slide background color (null = follow layout) */
   | { op: 'bg'; color: string | null }
   | { op: 'insert'; kind: ShapeKind; box: Box; text?: string; rid?: string }
@@ -184,6 +185,23 @@ export interface SlideThemeInfo {
   layouts: { path: string; name: string; type?: string }[]
   /** 当前幻灯片使用的 layout 路径 */
   layout: string
+}
+
+/** undo 快照：string = XML 文本，Uint8Array = 二进制，null = 该 part 当时不存在（新建 / 删除的可逆） */
+export type PartSnap = string | Uint8Array | null
+
+/** 一次结构编辑的 undo / redo 条目：`path` 为主目标 part，`extra` 为同一次编辑改动的其它 part */
+export interface UndoEntry {
+  path: string
+  before: PartSnap
+  after: PartSnap
+  /** 编辑影响的幻灯片，供 undo 后刷新（presentation.xml / 非 slide part 的条目必填） */
+  index?: number
+  extra?: { path: string; before: PartSnap; after: PartSnap }[]
+  /** delete 页时从批注存储摘除的批注（含回复）：undo 重新登记，redo 再次删除 */
+  commentsDel?: DocComment[]
+  /** undo / redo 后重读 presentation.xml 刷新幻灯片列表（add / delete / move / hide 需要） */
+  refresh?: boolean
 }
 
 export type SlideOp =

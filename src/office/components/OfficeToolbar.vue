@@ -108,7 +108,7 @@ function runMenu(o: Opt) {
   const it = pop.value?.item
   if (!it || it.t !== 'menu') return
   pop.value = null
-  run(it.cmd, o.args ?? (it.cmd === 'insertFunc' ? [o.label] : []))
+  run(it.cmd, o.args ?? ((it.cmd === 'insertFunc' || it.cmd === 'openFuncByName') ? [o.label] : []))
 }
 
 function pickColor(color: string | null) {
@@ -199,7 +199,7 @@ onBeforeUnmount(() => {
             <button
               v-else-if="it.t === 'btn'"
               class="ot-btn"
-              :class="[{ 'ot-big': bigOf(it), 'ot-on': props.bar?.painter && it.act.cmd === 'painter' }, { 'ot-off': offOf(it) }]"
+              :class="[{ 'ot-big': bigOf(it), 'ot-on': props.bar?.painter && (it.act.cmd === 'painter' || it.act.cmd === 'copyFormat') }, { 'ot-off': offOf(it) }]"
               :title="titleOf(it)"
               :disabled="offOf(it) || !has(it.act.cmd)"
               @click="run(it.act.cmd, it.act.args)"

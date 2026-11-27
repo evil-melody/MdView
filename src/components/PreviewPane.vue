@@ -248,7 +248,7 @@ const pdfHosts = computed(() =>
 )
 
 /** 每个页签一个引擎句柄：保存时按当前激活路径取对应实例 */
-type OfficeEngineApi = { save: () => Promise<Uint8Array | null> }
+type OfficeEngineApi = { save: () => Promise<Uint8Array | null>; find?: () => void }
 const engines = new Map<string, OfficeEngineApi>()
 function setEngine(path: string, el: unknown) {
   const api = el as OfficeEngineApi | null
@@ -583,6 +583,13 @@ function onWindowKeydown(e: KeyboardEvent) {
     return
   }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+    // Office 视图自带查找栏（Word/Excel），由当前激活页签的引擎实例打开；
+    // 旧路径 findSurface() 对 Office 恒返回 none，快捷键静默失效。
+    if (isOffice.value) {
+      const api = engines.get(String(props.activeTabPath ?? ''))
+      if (api && typeof api.find === 'function') { e.preventDefault(); api.find() }
+      return
+    }
     // 无可用查找面（HTML iframe / CodeEditor 自带）时交给各自处理，不抢键
     if (findSurface() === 'none') return
     e.preventDefault()
@@ -791,6 +798,8 @@ function applyJsonTransform(compact: boolean, whole = false) {
   }
   emit('dirty')
   emit('toast', compact ? '已压缩为单行' : '已格式化')
+  // 格式化全文后自动切到 JSON 页签：树视图实时跟随（报障：格式化后要看到树）
+  if ((!picked || !picked.text.trim()) && !compact && isJsonDoc.value && tab.value !== 'json') tab.value = 'json'
 }
 
 function openWrapMenu(ev: MouseEvent) {

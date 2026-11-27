@@ -2,7 +2,6 @@
  * Office Ribbon 声明式配置。按钮只描述「命令名 + 参数」，由视图的 commands 防腐层执行。
  * 只列真实可用的命令；分类汇总 / 数据透视 / 自动筛选走 block→前端聚合→set 写回，非内核 RPC。
  */
-import { functionCatalog } from './core/xlsx/formula/catalog'
 import type { FmtPatch } from './core/xlsx/types'
 
 export interface Act { cmd: string; args?: unknown[] }
@@ -81,47 +80,7 @@ const BORDER_STYLES: Opt[] = ['thin', 'medium', 'thick', 'dashed', 'dotted', 'do
   args: [{ borderStyle: v, border: 'all' }]
 }))
 const FUNC_FAST: Opt[] = ['SUM', 'AVERAGE', 'COUNT', 'MAX', 'MIN'].map((f) => ({ label: `Σ ${f}`, args: [f] }))
-/** 134 个公式函数，来自内核目录，按名称排序 */
-const FUNCS: Opt[] = functionCatalog().map((f) => ({
-  label: f.name,
-  args: [f.name],
-  hint: `${f.name}(${f.args.join(', ')}${f.variadic ? '…' : ''})`
-}))
-/** 内核函数目录（按名索引）：公式页的分类菜单从它取参数提示 */
-const FN_BY_NAME = new Map(functionCatalog().map((f) => [f.name, f]))
-/** 分类菜单项：只列内核真正支持的函数 */
-const funcOpts = (names: string[]): Opt[] =>
-  names.filter((n) => FN_BY_NAME.has(n)).map((n) => {
-    const f = FN_BY_NAME.get(n)!
-    return { label: f.name, args: [f.name], hint: `${f.name}(${f.args.join(', ')}${f.variadic ? '…' : ''})` }
-  })
-/** 公式页的函数分类（对应 Excel「自动求和 / 财务 / 逻辑 / 文本 / 日期和时间 / 查找和引用 / 数学和三角 / 其他函数」） */
-const CAT_FINANCE = ['PMT', 'FV', 'PV', 'NPER', 'RATE', 'NPV', 'IRR']
-const CAT_LOGIC = ['IF', 'IFS', 'SWITCH', 'AND', 'OR', 'NOT', 'XOR', 'TRUE', 'FALSE', 'IFERROR', 'IFNA']
-const CAT_TEXT = [
-  'CONCAT', 'CONCATENATE', 'TEXTJOIN', 'LEFT', 'RIGHT', 'MID', 'LEN', 'FIND', 'SEARCH', 'REPLACE', 'SUBSTITUTE',
-  'REPT', 'TEXT', 'TRIM', 'UPPER', 'LOWER', 'PROPER', 'EXACT', 'VALUE', 'CHAR', 'CODE'
-]
-const CAT_DATE = [
-  'DATE', 'DATEDIF', 'DAY', 'DAYS', 'EDATE', 'EOMONTH', 'HOUR', 'MINUTE', 'MONTH', 'NETWORKDAYS', 'NOW',
-  'SECOND', 'TIME', 'TODAY', 'WEEKDAY', 'YEAR'
-]
-const CAT_LOOKUP = [
-  'CHOOSE', 'COLUMN', 'COLUMNS', 'HLOOKUP', 'HYPERLINK', 'INDEX', 'INDIRECT', 'LOOKUP', 'MATCH', 'OFFSET',
-  'ROW', 'ROWS', 'VLOOKUP', 'XLOOKUP'
-]
-const CAT_MATH = [
-  'ABS', 'AVERAGE', 'AVERAGEIF', 'AVERAGEIFS', 'CEILING', 'CEILING.MATH', 'COUNT', 'COUNTA', 'COUNTBLANK',
-  'COUNTIF', 'COUNTIFS', 'EVEN', 'EXP', 'FACT', 'FLOOR', 'FLOOR.MATH', 'GCD', 'INT', 'LARGE', 'LCM', 'LN',
-  'LOG', 'LOG10', 'MAX', 'MAXIFS', 'MEDIAN', 'MIN', 'MINIFS', 'MOD', 'MODE', 'MODE.SNGL', 'ODD', 'PI',
-  'POWER', 'PRODUCT', 'RAND', 'RANDBETWEEN', 'RANK', 'RANK.EQ', 'ROUND', 'ROUNDDOWN', 'ROUNDUP', 'SIGN',
-  'SMALL', 'SQRT', 'STDEV', 'STDEV.P', 'STDEV.S', 'STDEVP', 'SUM', 'SUMIF', 'SUMIFS', 'SUMPRODUCT', 'TRUNC',
-  'VAR', 'VAR.P', 'VAR.S', 'VARP'
-]
-/** 「其他函数」= 目录里不属于以上分类的全部函数 */
-const CAT_OTHER = functionCatalog().map((f) => f.name).filter(
-  (n) => ![...CAT_FINANCE, ...CAT_LOGIC, ...CAT_TEXT, ...CAT_DATE, ...CAT_LOOKUP, ...CAT_MATH].includes(n)
-)
+/** 函数分类/目录单一来源 = composables/useFuncWizard.ts（向导与「插入函数」共用），此处不再重复 */
 const SHAPES: Opt[] = [
   { label: '文本框', args: ['text'] }, { label: '图片', args: ['image'] }, { label: '直线', args: ['line'] },
   { label: '矩形', args: ['rect'], sep: true }, { label: '圆角矩形', args: ['roundRect'] }, { label: '椭圆', args: ['ellipse'] },
@@ -197,7 +156,10 @@ const DOCX: Tab[] = [
   {
     id: 'home', label: '开始', groups: [
       g('剪贴板', [
-        b('↶', 'undo'), b('↷', 'redo'), b('🖌', 'painter'), b('⌫', 'clearFormat'), sep(),
+        b('粘贴', 'paste'), b('剪切', 'cut'), b('复制', 'copy'), sep(),
+        { t: 'btn', label: '↶', title: '撤销', act: { cmd: 'undo', args: [] } },
+        { t: 'btn', label: '↷', title: '重做', act: { cmd: 'redo', args: [] } },
+        b('🖌', 'painter'), b('⌫', 'clearFormat'), sep(),
         b('复制样式', 'copyFormat')
       ]),
       g('字体', [
@@ -213,7 +175,7 @@ const DOCX: Tab[] = [
         b('•', 'toggleList', 'bullet'), b('1.', 'toggleList', 'number'),
         b('⇤', 'indent', -1), b('⇥', 'indent', 1)
       ]),
-      g('编辑', [b('查找', 'find'), b('替换', 'replace'), b('全选', 'selectAll'), m('特殊符号', 'insertText', SYMBOLS)])
+      g('编辑', [b('查找', 'find'), b('替换', 'replace'), b('全选', 'selectAll'), b('删除所选', 'deleteSelection'), m('特殊符号', 'insertText', SYMBOLS)])
     ]
   },
   {
@@ -238,7 +200,7 @@ const DOCX: Tab[] = [
       ]),
       g('页', [b('分页符', 'insertPageBreak')]),
       g('页眉页脚', [
-        b('编辑页眉', 'setHeader', '页眉文字'), b('编辑页脚', 'setFooter', '页脚文字'),
+        b('编辑页眉', 'editHF', 'header'), b('编辑页脚', 'editHF', 'footer'),
         b('插入页码', 'pageNumber'), b('插入总页数', 'pageCount'),
         b('清除页眉', 'clearHeader'), b('清除页脚', 'clearFooter'),
         { t: 'toggle', label: '首页不同', key: 'titlePg', title: '首页使用不同的页眉页脚' }
@@ -264,7 +226,7 @@ const DOCX: Tab[] = [
         b('全部接受', 'reviewChange', true, true), b('全部拒绝', 'reviewChange', false, true)
       ]),
       g('批注', [b('新建批注', 'addComment'), b('批注列表', 'listComments')]),
-      g('样式', [b('更新样式以匹配', 'updateStyle'), b('删除所选', 'deleteSelection')])
+      g('样式', [b('更新样式以匹配', 'updateStyle')])
     ]
   },
   {
@@ -358,7 +320,12 @@ const XLSX: Tab[] = [
         nb('筛选截图', '「筛选截图」需要 Windows 截图服务'),
         nb('建议图表', '推荐图表引擎需要联网模型'),
         nb('地图', '地图图表（Map Chart）需要联网地图服务'),
-        nb('数据透视图', '数据透视图（PivotChart）部件未实现')
+        nb('数据透视图', '数据透视图（PivotChart）部件未实现'),
+        m('插入图表', 'insertChart', [
+          { label: '柱形图', args: ['col'] }, { label: '条形图', args: ['bar'] },
+          { label: '折线图', args: ['line'] }, { label: '饼图', args: ['pie'] },
+          { label: '散点图', args: ['scatter'] }, { label: '面积图', args: ['area'] }
+        ])
       ]),
       g('链接', [b('链接', 'insertLink')]),
       g('文本', [
@@ -410,16 +377,16 @@ const XLSX: Tab[] = [
   {
     id: 'formulas', label: '公式', groups: [
       g('函数库', [
-        m('插入函数', 'insertFunc', FUNCS),
+        b('插入函数', 'openFuncDlg'),
         m('自动求和', 'insertFunc', FUNC_FAST),
-        mdyn('最近使用', 'insertFunc', 'recentFunctions'),
-        m('财务', 'insertFunc', funcOpts(CAT_FINANCE)),
-        m('逻辑', 'insertFunc', funcOpts(CAT_LOGIC)),
-        m('文本', 'insertFunc', funcOpts(CAT_TEXT)),
-        m('日期和时间', 'insertFunc', funcOpts(CAT_DATE)),
-        m('查找和引用', 'insertFunc', funcOpts(CAT_LOOKUP)),
-        m('数学和三角', 'insertFunc', funcOpts(CAT_MATH)),
-        m('其他函数', 'insertFunc', funcOpts(CAT_OTHER))
+        mdyn('最近使用', 'openFuncByName', 'recentFunctions'),
+        b('财务', 'openFuncDlg', '财务'),
+        b('逻辑', 'openFuncDlg', '逻辑'),
+        b('文本', 'openFuncDlg', '文本'),
+        b('日期和时间', 'openFuncDlg', '日期和时间'),
+        b('查找和引用', 'openFuncDlg', '查找和引用'),
+        b('数学和三角', 'openFuncDlg', '数学和三角'),
+        b('其他函数', 'openFuncDlg', '其他函数')
       ]),
       g('名称管理器', [
         b('名称管理器', 'nameManager'), b('定义名称', 'defineName'),
@@ -448,12 +415,13 @@ const XLSX: Tab[] = [
         b('全部刷新', 'refreshAll'),
         nb('属性', '文档属性面板未实现'),
         nb('查询和连接', 'Power Query 查询与连接窗格未实现'),
-        nb('工作簿连接', '外部工作簿连接管理未实现')
+        nb('工作簿连接', '外部工作簿连接管理未实现'),
+        b('刷新图表', 'chartRefresh'), b('刷新透视表', 'pivotRefresh'), b('刷新序列', 'seriesRefresh')
       ]),
       g('排序和筛选', [
         m('排序', 'sort', [{ label: '升序', args: [false] }, { label: '降序', args: [true] }]),
         b('筛选', 'autoFilter'),
-        b('清除', 'clearCells')
+        b('清除', 'clearFilter')
       ]),
       g('数据工具', [
         b('数据验证', 'dataValidation'),
@@ -465,12 +433,15 @@ const XLSX: Tab[] = [
         b('数据透视表', 'pivotTable'),
         nb('分析工具', '分析工具库（方差分析 / 回归 / 抽样）未实现'),
         b('组合', 'consolidate'),
-        nb('取消组合', '数据分组与取消组合未实现')
+        b('取消组合', 'ungroup')
       ]),
       g('汇总', [
         b('分类汇总', 'subtotal'),
         nb('隐藏', '分组明细隐藏（大纲）未落盘到 OOXML'),
-        nb('拆分工具', '数据拆分（按分隔符分列）未实现')
+        nb('拆分工具', '数据拆分（按分隔符分列）未实现'),
+        m('大纲级别', 'outlineLevel', [
+          { label: '级别 1', args: [1] }, { label: '级别 2', args: [2] }, { label: '级别 3', args: [3] }
+        ])
       ])
     ]
   },
@@ -550,6 +521,18 @@ const PPTX: Tab[] = [
         B('新建', 'addSlide'), b('复制', 'duplicate'), b('删除', 'deleteSlide'),
         { t: 'toggle', label: '隐藏', key: 'hidden' }, b('上移', 'moveSlide', -1), b('下移', 'moveSlide', 1)
       ]),
+      g('字体', [
+        m('字体', 'setFont', listOpts(FONTS, 'setFont')),
+        m('字号', 'setSize', listOpts(SIZES, 'setSize')),
+        b('B', 'toggle', 'b'), b('I', 'toggle', 'i'), b('U', 'toggle', 'u'), b('S', 'toggle', 'strike'),
+        b('上标', 'sup'), b('下标', 'sub'), sep(), c('字体色', 'setColor'), c('高亮', 'setHighlight')
+      ]),
+      g('段落', [
+        b('左', 'setAlign', 'left'), b('中', 'setAlign', 'center'), b('右', 'setAlign', 'right'), b('两端', 'setAlign', 'justify'),
+        m('行距', 'setLine', [1, 1.15, 1.5, 2, 2.5, 3].map((v) => ({ label: String(v), args: [v] }))),
+        b('•', 'toggleList', 'bullet'), b('1.', 'toggleList', 'number'),
+        b('⇤', 'indent', -1), b('⇥', 'indent', 1), sep(), b('⌫', 'clearFormat')
+      ]),
       g('绘图', [
         m('形状', 'insertShape', SHAPES), b('文本框', 'insertShape', 'text'), b('图片', 'insertShape', 'image'), b('直线', 'insertShape', 'line')
       ]),
@@ -557,7 +540,8 @@ const PPTX: Tab[] = [
         b('置于顶层', 'order', 'front'), b('置于底层', 'order', 'back'),
         b('上移一层', 'order', 'forward'), b('下移一层', 'order', 'backward'),
         b('复制形状', 'duplicateShape'), b('删除形状', 'deleteShape'),
-        m('对齐幻灯片', 'alignOn', ALIGN_ON)
+        m('对齐幻灯片', 'alignOn', ALIGN_ON),
+        b('横向分布', 'distribute', 'h'), b('纵向分布', 'distribute', 'v')
       ]),
       g('格式', [
         c('形状填充', 'shapeFill'), c('线条色', 'shapeLine'),
@@ -583,7 +567,10 @@ const PPTX: Tab[] = [
         ]),
         b('移除切换', 'slideTransition', null)
       ]),
-      g('编辑', [b('↶', 'undo', false), b('↷', 'undo', true)])
+      g('编辑', [
+        { t: 'btn', label: '↶', title: '撤销', act: { cmd: 'undo', args: [false] } },
+        { t: 'btn', label: '↷', title: '重做', act: { cmd: 'undo', args: [true] } }
+      ])
     ]
   },
   {

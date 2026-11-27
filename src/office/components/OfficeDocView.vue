@@ -66,13 +66,14 @@ editor.onImage = (img) => {
 
 /* ---- 页眉页脚：每页边距区渲染 + 双击进入编辑态（文本行经 docx.hf 写回 part） ---- */
 // HF 变化（本端编辑 / 协作者 / 样式联动重转换）→ 换 meta 触发整页重渲
-const applyHF = (headers: { header?: Block[]; footer?: Block[]; firstHeader?: Block[]; firstFooter?: Block[]; evenHeader?: Block[]; evenFooter?: Block[] }, titlePg?: boolean, evenAndOddHeaders?: boolean) => {
+const applyHF = (headers: { header?: Block[]; footer?: Block[]; firstHeader?: Block[]; firstFooter?: Block[]; evenHeader?: Block[]; evenFooter?: Block[] }, titlePg?: boolean, evenAndOddHeaders?: boolean, trackChanges?: boolean) => {
   if (!meta.value) return
   meta.value = { ...meta.value, header: headers.header, footer: headers.footer, firstHeader: headers.firstHeader, firstFooter: headers.firstFooter, evenHeader: headers.evenHeader, evenFooter: headers.evenFooter, ...(titlePg !== undefined ? { titlePg } : {}), ...(evenAndOddHeaders !== undefined ? { evenAndOddHeaders } : {}) }
   bar.titlePg = Boolean(meta.value.titlePg)
+  if (trackChanges !== undefined) bar.tracking = trackChanges
   version.value++
 }
-editor.onHF = (r) => applyHF(r.headers, r.titlePg, r.evenAndOddHeaders)
+editor.onHF = (r) => applyHF(r.headers, r.titlePg, r.evenAndOddHeaders, r.trackChanges)
 editor.onHeaders = (h) => applyHF(h)
 /* 页面设置（纸张/方向/页边距/分栏）变化 → 换 meta.page 触发整页重渲。
    页宽/页高/内边距/栏数/分页全是 meta.page 的 computed 派生，不接这个回调就永远不重绘：
@@ -308,11 +309,14 @@ const commands = {
   // 开始
   undo: () => editor.undo(),
   redo: () => editor.redo(),
-  painter: () => {
-    bar.painter = !bar.painter
-    if (bar.painter) editor.copyFormat()
-  },
-  copyFormat: () => editor.copyFormat(),
+  // 剪贴板三按钮与右键菜单共用 docPaste/docCopy；只读态粘贴/剪切回提示串（ribbon 侧靠 has() 灰显）
+  paste: () => (props.editable ? docPaste() : '只读模式无法粘贴'),
+  cut: () => (props.editable ? docCopy(true, clipText()) : '只读模式无法剪切'),
+  copy: () => docCopy(false, clipText()),
+  // 两个入口共用内核 copyFormat 的开关语义；按钮点亮状态必须跟内核一致，
+  // 否则「复制样式」复制了格式却因 bar.painter=false 永不套用，🖌 再点还会清空已复制的格式。
+  painter: () => { editor.copyFormat(); bar.painter = editor.painter !== null },
+  copyFormat: () => { editor.copyFormat(); bar.painter = editor.painter !== null },
   clearFormat: () => editor.clearFormat(),
   toggle: (k: 'b' | 'i' | 'u' | 'strike') => editor.toggle(k),
   setSize: (n: number) => editor.setSize(n),
@@ -342,19 +346,54 @@ const commands = {
   setCellVAlign: (v: 'top' | 'middle' | 'bottom') => editor.setCellVAlign(v),
   insertImage: (blob: Blob) => editor.insertImages([blob]),
   replaceImage: (blob: Blob) => editor.replaceImage(blob),
-  insertLink: async () => editor.setLink((await officePrompt('链接地址', 'https://')) || null),
+  // 「取消」不是「清除链接」：早期版本 `|| null` 会把所选文字的链接抹掉并进 undo 历史，
+  // 改为直接早退并回提示串（工具条 call() 把字符串 flash 成 toast）。
+  insertLink: async () => {
+    const v = await officePrompt('链接地址', 'https://')
+    if (v === null || !v.trim()) return '已取消'
+    return editor.setLink(v)
+  },
   insertPageBreak: () => editor.insertPageBreak(),
-  setHeader: (text: string) => editor.setHeaderFooter({ parts: { header: [{ text, align: 'center' }] } }),
-  setFooter: (text: string) => editor.setHeaderFooter({ parts: { footer: [{ text, align: 'center' }] } }),
-  pageNumber: () => editor.setHeaderFooter({ parts: { footer: [{ text: '{PAGE}', align: 'center' }] } }),
-  pageCount: () => editor.setHeaderFooter({ parts: { footer: [{ text: '{NUMPAGES}', align: 'center' }] } }),
+  // 「编辑页眉/页脚」不再用固定文本整页覆盖：进入既有 hf 编辑态（等同双击边距区），
+  // 光标/可见页决定进哪一页的那一种 part。ribbon 传的占位文本一并忽略。
+  editHF: (kind: 'header' | 'footer') => {
+    if (hfEdit.value) hfCommit()
+    const sel = editor.input.sel() ?? editor.input.lastSel
+    const bi = sel ? Number(sel.f.pa.split('.')[0]) : NaN
+    const pi = Number.isFinite(bi) ? pages.value.findIndex((p) => bi >= p.start && bi < p.end) : -1
+    openHF(kind, pi >= 0 ? pi : Math.max(0, firstPage.value))
+  },
+  setHeader: () => commands.editHF('header'),
+  setFooter: () => commands.editHF('footer'),
+  // 「插入页码/总页数」往现有页脚追加字段：保留已有文字与其他字段（{PAGE}/{NUMPAGES} 可共存），
+  // 空页脚时新建一行（Word 页脚默认右对齐）。
+  hfField: (token: '{PAGE}' | '{NUMPAGES}') => {
+    if (hfEdit.value) hfCommit()
+    const sel = editor.input.sel() ?? editor.input.lastSel
+    const bi = sel ? Number(sel.f.pa.split('.')[0]) : NaN
+    const pi = Number.isFinite(bi) ? pages.value.findIndex((p) => bi >= p.start && bi < p.end) : 0
+    const idx = Math.max(0, pi)
+    const key = hfEditKind('footer', idx, meta.value ?? {})
+    const lines = hfLinesOf(hfShowBlocks('footer', idx))
+    let li = -1
+    for (let i = lines.length - 1; i >= 0; i--) if (lines[i].text !== '') { li = i; break }
+    if (li < 0) return editor.setHeaderFooter({ parts: { [key]: [{ text: token, align: 'right' }] } })
+    if (lines[li].text.includes(token)) return `页脚已有${token === '{PAGE}' ? '页码' : '总页数'}字段`
+    // 其余行原样保留，只往最后一个有内容的行尾追加字段
+    const next = lines.map((l, i) => (i === li ? { ...l, text: `${l.text} ${token}` } : l))
+    return editor.setHeaderFooter({ parts: { [key]: next } })
+  },
+  pageNumber: () => commands.hfField('{PAGE}'),
+  pageCount: () => commands.hfField('{NUMPAGES}'),
   insertText: (s: string) => editor.insertText(s),
   imageScale: (f: number | 'fit') => editor.resizeImage(f),
   /** ribbon「裁剪」入口：需先单击选中图片，再切换四边手柄裁剪态（与双击图片等价） */
   toggleCrop: () => {
-    if (imgSel.value) cropMode.value = !cropMode.value
+    if (!editor.imageSel()) return '请先选中图片'
+    cropMode.value = !cropMode.value
   },
   setAltText: async () => {
+    if (!editor.imageSel()) return '请先选中图片'
     const v = await officePrompt('图片替代文字')
     if (v !== null) editor.setAltText(v)
   },
@@ -390,10 +429,14 @@ const commands = {
     const text = (list ?? []).map((c, i) => `${i + 1}. ${c.author?.name ?? '匿名'}：${c.text ?? ''}`).join('\n')
     await officeAlert('批注列表', text || '（暂无批注）')
   },
+  // 「更新样式以匹配」：段落没有显式 pStyle 时不再静默跳过——按 Word 语义落到内置 Normal
+  // （'@normal' 经 canonId 补建缺失的样式条目）。取舍：提示串会让按钮对无样式段落永久失效，
+  // 而 Word 本身在这种段落上就是更新 Normal；副作用是首次使用可能把 Normal 改成本段外观，
+  // 全站同类段落跟着变——这正是该命令的语义，且有 undo 条目可回退。
   updateStyle: () => {
     const s = editor.input.sel()
-    const sid = s ? editor.para(s.a.pa)?.sid : undefined
-    if (sid) void editor.updateStyle(sid)
+    if (!s) return '请先将光标置于段落'
+    return editor.updateStyle(editor.para(s.a.pa)?.sid ?? '@normal')
   },
   deleteSelection: () => editor.deleteSelection(),
   // 视图
@@ -677,15 +720,23 @@ function closeDocMenu() {
 async function docPaste() {
   closeDocMenu()
   let text = ''
-  try { text = (await navigator.clipboard?.readText()) ?? '' } catch { /* 无权限时静默 */ }
-  if (text) editor.insertText(text)
+  try { text = (await navigator.clipboard?.readText()) ?? '' } catch { /* WKWebView 无权限 */ }
+  // 拿不到内容要如实反馈（ribbon 按钮据此 toast）；右键路径忽略返回值，行为不变
+  if (!text) return '剪贴板不可用，请用 ⌘V'
+  editor.insertText(text)
 }
-/** 复制/剪切走剪贴板 API + 内核删除，不直接 execCommand 改 DOM，避免破坏选区映射 */
-async function docCopy(cut: boolean) {
+/** 复制/剪切走剪贴板 API + 内核删除，不直接 execCommand 改 DOM，避免破坏选区映射。
+ *  `text` 缺省用右键时缓存的 menuText；ribbon 按钮传现取的选区文本。 */
+async function docCopy(cut: boolean, text: string | null = menuText) {
   closeDocMenu()
-  if (menuText === null) return
-  try { await navigator.clipboard?.writeText(menuText) } catch { /* 无权限时静默 */ }
+  if (text === null || text === '') return '请先选中内容'
+  try { await navigator.clipboard.writeText(text) } catch { return '剪贴板不可用，请用 ⌘C' }
   if (cut && props.editable) editor.deleteSelection()
+}
+/** ribbon 复制/剪切：选区文本现取（按钮点击不抢焦点，实时选区还在；被清掉时退到最后快照） */
+const clipText = () => {
+  const sel = editor.input.sel() ?? editor.input.lastSel
+  return sel ? selPlain(editor, sel) : null
 }
 
 /* ---- 拖动交互：事件委托在 rootEl 上（v-html 会重建 DOM，不能给具体元素挂监听） ---- */
@@ -965,6 +1016,15 @@ function onPointerDown(e: PointerEvent) {
   columnPointerDown(e)
 }
 
+/** 进入某页页眉/页脚的编辑态（双击边距区与 ribbon「编辑页眉/页脚」共用） */
+function openHF(kind: 'header' | 'footer', idx: number) {
+  hfEdit.value = { kind, idx }
+  void nextTick(() => {
+    const box = rootEl.value?.querySelector<HTMLElement>(`[data-page="${idx}"] .de-hf-edit`)
+    box?.focus()
+  })
+}
+
 /** 双击：页眉/页脚区域进入编辑态；再次双击（任意处）提交；双击裁剪手柄把该侧裁剪复位 */
 function onDblClick(e: MouseEvent) {
   const t = e.target instanceof Element ? (e.target as HTMLElement) : null
@@ -988,13 +1048,7 @@ function onDblClick(e: MouseEvent) {
   const region = t?.closest('.de-hf') as HTMLElement | null
   if (region && props.editable) {
     e.preventDefault()
-    const kind = region.dataset.hf === 'footer' ? 'footer' : 'header'
-    const idx = Number(region.closest('[data-page]')?.getAttribute('data-page') ?? 0)
-    hfEdit.value = { kind, idx }
-    void nextTick(() => {
-      const box = rootEl.value?.querySelector<HTMLElement>(`[data-page="${idx}"] .de-hf-edit`)
-      box?.focus()
-    })
+    openHF(region.dataset.hf === 'footer' ? 'footer' : 'header', Number(region.closest('[data-page]')?.getAttribute('data-page') ?? 0))
     return
   }
   // 已选中图片上双击：切换裁剪态
@@ -1059,6 +1113,11 @@ onMounted(() => {
       editor.styles = m.styles ?? []
       editor.compatMode = m.compatMode ?? 12
       bar.titlePg = Boolean(m.titlePg)
+      // settings.xml 里读回的修订开关：quiet 同步内核，不反向写盘
+      if (m.trackChanges !== undefined) {
+        bar.tracking = m.trackChanges
+        editor.setTracking(m.trackChanges, true)
+      }
       version.value++
     }),
     props.client.on('docx:done', (d) => {

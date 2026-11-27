@@ -1,6 +1,6 @@
 import { defineComponent, h } from 'vue'
 
-/** 诊断用轻量占位组件：替换重型预览子组件，避免 harness 构建拉入 Univer / genoffice。 */
+/** 诊断用轻量占位组件：替换重型预览子组件，避免 harness 构建拉入 Univer。 */
 export default defineComponent({
   name: 'DevStub',
   props: {

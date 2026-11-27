@@ -4,7 +4,8 @@
  * 本内核可解析 + 可编辑 + 写回；PowerPoint/Excel/Word 兼容性靠标准 OOXML 结构
  * （Content_Types / _rels / 主 part / 子 part rels 全齐）。
  * ponytail: 不内置 styles.xml/theme 富模板——内核 parser 对缺失有兜底（parseTheme(undefined)、
- * docDefaults 合成），升级路径 = 换成 vendor genoffice 的 buildBlankDocx/createBlankPptx（带样式表）。
+ * docDefaults 合成）。升级路径 = 自带最小 styles.xml/theme1.xml part（genoffice vendor 已于
+ * P18 后清理，不再作为底座）。
  */
 import { writeZip, type PartData } from './zipwrite'
 

@@ -28,6 +28,9 @@ const DIRS = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'] as const
 const MIN_PX = 8
 
 const sel = ref<number | null>(null)
+const rootEl = ref<HTMLElement | null>(null)
+/** 页签常驻（v-show）：隐藏实例的全局键盘监听必须先让路，否则抢先删掉别页签的图 */
+const visible = () => rootEl.value?.offsetParent !== null && rootEl.value?.offsetWidth !== 0
 /** 拖动/缩放实时预览：box 为 .ov-grid 内屏幕 px（含缩放） */
 const drag = shallowRef<{ i: number; kind: 'move' | 'resize'; box: { x: number; y: number; w: number; h: number } } | null>(null)
 let resizeDir = ''
@@ -59,6 +62,10 @@ const selBox = computed(() => (sel.value === null ? null : boxOf(sel.value)))
 function onImgDown(e: PointerEvent, i: number) {
   if (!props.editable) return
   e.preventDefault()
+  // 公式栏 / 名称框可能还留着焦点：onKey 的输入框守卫会让 Backspace 删不掉图片。
+  // 点图片即交出焦点（Office 行为），键盘删除才能落到图片层。
+  const ae = document.activeElement as HTMLElement | null
+  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) ae.blur()
   sel.value = i
   base = screenBox(i)
   resizeDir = ''
@@ -152,7 +159,7 @@ function onUp() {
 
 /** Delete / Backspace 删除选中图片，Esc 取消选中（capture 阶段截获，避免触发清除单元格） */
 function onKey(e: KeyboardEvent) {
-  if (sel.value === null || !props.editable) return
+  if (!visible() || sel.value === null || !props.editable) return
   const ae = document.activeElement as HTMLElement | null
   if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return
   if (document.querySelector('.ov-flt-overlay, .ov-ctx-overlay, .ov-dlg-overlay')) return
@@ -170,7 +177,7 @@ function onKey(e: KeyboardEvent) {
 
 /** 点空白处（网格 / 其他覆盖层）取消选中；图片与手柄的 pointerdown 自带 stop 不会到这 */
 function onDocDown(e: PointerEvent) {
-  if (sel.value === null) return
+  if (!visible() || sel.value === null) return
   const t = e.target as HTMLElement | null
   if (t && t.closest && t.closest('.ov-dlayer')) return
   sel.value = null
@@ -197,7 +204,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="ov-dlayer">
+  <div ref="rootEl" class="ov-dlayer">
     <img
       v-for="(d, i) in drawings"
       :key="d.id + ':' + d.rid"

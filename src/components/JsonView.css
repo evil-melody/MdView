@@ -103,13 +103,15 @@
 }
 
 .jv-leaf { cursor: default; }
-.jv-key { color: #6ea8fe; }
+/* 树视图词法配色：键紫、串绿、数红、布尔蓝、标点灰（参考 JSON 树查看器惯例） */
+.jv-key { color: #c792ea; }
 .jv-colon { color: var(--text-2); margin-right: 6px; }
-.jv-brace { color: var(--text); }
+.jv-brace { color: var(--text-2); }
 .jv-str { color: #a5d6a7; }
-.jv-num { color: #f78c6c; }
-.jv-bool, .jv-null { color: #c792ea; }
+.jv-num { color: #ef5350; }
+.jv-bool { color: #6ea8fe; }
+.jv-null { color: var(--text-2); }
 .jv-val { color: var(--text); }
-.jv-count { margin-left: 8px; color: var(--text-2); font-size: 10px; }
+.jv-count { margin-left: 8px; color: var(--text-2); font-size: 11px; }
 .jv-more, .jv-fail { padding: 10px 14px; color: var(--text-2); font-size: 12px; }
 .jv-fail p { margin: 0 0 6px; }

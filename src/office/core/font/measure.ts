@@ -5,7 +5,7 @@
  * —— 这样 advance 的 16.16 定点精度不因字号变化丢失（engine.js:423 注释语义）。
  * 出口单位：pt（排版层内部）与 mm（对齐 sdkjs 全链路 mm 约定）。
  */
-import { loadEngine, shapeText, isFullwidthCp, MEASURE_FONTSIZE, GRAPHEME_COEF, type FontEngine, type FontFile, type MeasureMode } from './wasm'
+import { loadEngine, fontAssetUrl, shapeText, isFullwidthCp, MEASURE_FONTSIZE, GRAPHEME_COEF, type FontEngine, type FontFile, type MeasureMode } from './wasm'
 
 /** 字体族注册表：族名 → 四样式 TTF 字节。原型只挂度量兼容的开源字体集。 */
 export interface FontFaceSources {
@@ -20,7 +20,8 @@ const fontCache = new Map<string, ArrayBuffer>()
 async function fetchFont(url: string): Promise<ArrayBuffer> {
   const hit = fontCache.get(url)
   if (hit) return hit
-  const res = await fetch(url)
+  // 相对 URL 在 Worker 里解析不了（基准是 worker 自己的 scriptURL）→ 统一转绝对
+  const res = await fetch(fontAssetUrl(url))
   if (!res.ok) throw new Error(`font fetch failed: ${url} (${res.status})`)
   const buf = await res.arrayBuffer()
   fontCache.set(url, buf)

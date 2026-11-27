@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** JSON 专用区：左侧源码可编辑，右侧格式化树实时跟随；格式化 / 压缩互转 */
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import CodeEditor from './CodeEditor.vue'
 
 const props = defineProps<{ content: string; path: string }>()
@@ -24,6 +24,15 @@ interface Row {
 }
 
 const collapsed = ref(new Set<string>())
+/** 内容变化后路径集合改变：旧折叠态里不再存在的键清掉，避免残留影响计数与展示 */
+watch(() => props.content, () => {
+  if (!collapsed.value.size) return
+  const live: string[] = []
+  if (parsed.value.ok) containerPaths(parsed.value.value, '$', live)
+  const keep = new Set(live)
+  const next = new Set([...collapsed.value].filter((p) => keep.has(p)))
+  if (next.size !== collapsed.value.size) collapsed.value = next
+})
 const parsed = computed(() => {
   try {
     return { ok: true as const, value: JSON.parse(props.content) as unknown }
@@ -56,16 +65,13 @@ function walk(v: unknown, key: string, depth: number, path: string, out: Row[]) 
   const open = !collapsed.value.has(path)
   out.push({
     path, depth, key,
-    preview: open ? (isArr ? '[' : '{') : (isArr ? '[ … ]' : '{ … }'),
+    preview: isArr ? '[ ]' : '{ }',
     cls: 'jv-brace', hasChildren: true, open, count: entries.length,
   })
   if (!open) return
   for (const [k, val] of entries) {
     if (out.length >= MAX_ROWS) break
     walk(val, k, depth + 1, path + '/' + k, out)
-  }
-  if (out.length < MAX_ROWS) {
-    out.push({ path: path + '#end', depth, key: '', preview: isArr ? ']' : '}', cls: 'jv-brace', hasChildren: false, open: false })
   }
 }
 
@@ -148,7 +154,7 @@ const stat = computed(() => {
           <span v-if="r.key" class="jv-key">{{ r.key }}</span>
           <span v-if="r.key" class="jv-colon">:</span>
           <span :class="r.cls">{{ r.preview }}</span>
-          <span v-if="r.count !== undefined && r.open" class="jv-count">{{ r.count }}</span>
+          <span v-if="r.count !== undefined" class="jv-count">{{ r.count }} 项</span>
         </div>
         <div v-if="truncated" class="jv-more">仅显示前 {{ MAX_ROWS }} 行，可折叠节点继续查看</div>
       </div>

@@ -100,7 +100,13 @@ onBeforeUnmount(() => {
   client.value = null
 })
 
-defineExpose({ save })
+/** 打开当前文档的查找栏（Word / Excel 视图有 find 命令；PPT 无查找面则忽略） */
+function find() {
+  const fn = viewRef.value?.commands?.find
+  if (typeof fn === 'function') fn()
+}
+
+defineExpose({ save, find })
 </script>
 
 <template>

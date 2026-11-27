@@ -4,7 +4,7 @@
  * 真实 Office 打开同样呈现同一张图（图片级 1:1；原生 chart part 是后续升级项）。
  */
 
-export type ChartKind = 'col' | 'bar' | 'line' | 'pie'
+export type ChartKind = 'col' | 'bar' | 'line' | 'pie' | 'area' | 'scatter'
 
 export interface ChartSeries {
   name: string
@@ -63,9 +63,13 @@ function pieSlice(cx: number, cy: number, r: number, a0: number, a1: number): st
   return `M ${cx} ${cy} L ${x0.toFixed(1)} ${y0.toFixed(1)} A ${r} ${r} 0 ${large} 1 ${x1.toFixed(1)} ${y1.toFixed(1)} Z`
 }
 
+const KINDS: ChartKind[] = ['col', 'bar', 'line', 'pie', 'area', 'scatter']
+
 /** 渲染 640×400 图表 SVG（白底、网格、图例，Office 版式）。
- *  导出供原生 chart part 的视图层（OfficeSheetFeatureLayer）按读回的数据重绘同一张图。 */
+ *  导出供原生 chart part 的视图层（OfficeSheetFeatureLayer）按读回的数据重绘同一张图。
+ *  未知 kind 一律归一到 'col'（Excel 默认图型），绝不静默退化到别的图型。 */
 export function chartSvg(kind: ChartKind, data: ChartData): string {
+  if (!KINDS.includes(kind)) kind = 'col'
   const W = 640, H = 400
   const T = 30, B = 60, L = 70, R = 20
   const pw = W - L - R, ph = H - T - B
@@ -86,7 +90,7 @@ export function chartSvg(kind: ChartKind, data: ChartData): string {
     .join('')
 
   let plot = ''
-  if (kind === 'col' || kind === 'line') {
+  if (kind === 'col' || kind === 'line' || kind === 'area' || kind === 'scatter') {
     const n = data.cats.length
     const step = pw / n
     const catLabels = data.cats
@@ -108,6 +112,45 @@ export function chartSvg(kind: ChartKind, data: ChartData): string {
               })
               .join(''),
           )
+          .join('')
+    } else if (kind === 'area') {
+      // 面积图：折线 + 到底部闭合的半透明填充，多系列按原序叠加（Excel 标准分组同款）
+      const yBase = T + ph
+      plot =
+        catLabels +
+        data.series
+          .map((s, si) => {
+            const col = PALETTE[si % PALETTE.length]
+            const pts = s.values.map((v, i) => `${(L + step * i + step / 2).toFixed(1)},${yOf(v).toFixed(1)}`)
+            const poly = `${L.toFixed(1)},${yBase} ${pts.join(' ')} ${(L + step * s.values.length + step / 2 - step).toFixed(1)},${yBase}`
+            return `<polygon points="${poly}" fill="${col}" fill-opacity="0.55" stroke="none"/>` +
+              `<polyline points="${pts.join(' ')}" fill="none" stroke="${col}" stroke-width="2"/>`
+          })
+          .join('')
+    } else if (kind === 'scatter') {
+      // 散点图：X 轴按数值线性刻度（分类文本解不出数时退化为等距序号），点 + 连线（lineMarker）
+      const xs = data.cats.map((c) => num(c))
+      const allNum = xs.every((v) => v !== null) && xs.length > 1
+      const xMin = allNum ? Math.min(...(xs as number[])) : 0
+      const xMax = allNum ? Math.max(...(xs as number[])) : Math.max(1, data.cats.length - 1)
+      const xSpan = xMax - xMin || 1
+      const xOf = allNum
+        ? (i: number) => L + pw * (((xs[i] as number) - xMin) / xSpan)
+        : (i: number) => L + step * i + step / 2
+      const xLabels = allNum
+        ? [xMin, (xMin + xMax) / 2, xMax]
+            .map((v) => `<text x="${(L + pw * ((v - xMin) / xSpan)).toFixed(1)}" y="${T + ph + 16}" font-size="11" fill="#444" text-anchor="middle">${Math.round(v * 100) / 100}</text>`)
+            .join('')
+        : catLabels
+      plot =
+        xLabels +
+        data.series
+          .map((s, si) => {
+            const col = PALETTE[si % PALETTE.length]
+            const pts = s.values.map((v, i) => `${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`).join(' ')
+            return `<polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.5"/>` +
+              s.values.map((v, i) => `<circle cx="${xOf(i).toFixed(1)}" cy="${yOf(v).toFixed(1)}" r="3.5" fill="${col}"/>`).join('')
+          })
           .join('')
     } else {
       plot =

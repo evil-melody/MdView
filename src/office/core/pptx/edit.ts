@@ -8,11 +8,12 @@ import {
   escText, type RChild, type RNode,
 } from '../raw'
 import { EMU_PER_PX } from '../units'
+import type { DocComment } from '../comments'
 import type { PptxPresentation } from './parser'
 import { COMMENT_EXT_RE, isCommentRel } from './comments'
 import { applyAnim, applyTransition } from './anim'
 import { applyChartData as applyChartDataXml, sourceWrites, updateChartSources } from './chart'
-import type { Box, PresentationMeta, ShapeOp, SlideModel, SlideOp } from './types'
+import type { Box, PartSnap, PresentationMeta, ShapeOp, SlideModel, SlideOp, UndoEntry } from './types'
 
 const NS_A = 'http://schemas.openxmlformats.org/drawingml/2006/main'
 const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
@@ -495,14 +496,30 @@ async function editSlide(pres: PptxPresentation, index: number, fn: (nodes: RChi
   return pres.slide(index)
 }
 
-/** undoes / redoes the last shape edit; returns the slide index and its new model */
-export async function undoShapes(pres: PptxPresentation, redo = false): Promise<{ index: number; model: SlideModel } | null> {
+/** 应用一条 undo / redo：恢复主 part 与 extra part（null = 删除该 part），并还原批注 */
+async function applyUndoSnap(pres: PptxPresentation, e: UndoEntry, undo: boolean): Promise<void> {
+  const restore = (path: string, s: PartSnap) => pres.pkg.setPart(path, s)
+  restore(e.path, undo ? e.before : e.after)
+  for (const x of e.extra ?? []) restore(x.path, undo ? x.before : x.after)
+  if (e.commentsDel) {
+    if (undo) for (const c of e.commentsDel) pres.comments.set(c.id, c)
+    else for (const c of e.commentsDel) pres.comments.set(c.id, null)
+  }
+}
+
+/** undoes / redoes the last edit; returns the slide index and its new model（结构操作另带回刷新后的 meta） */
+export async function undoShapes(pres: PptxPresentation, redo = false): Promise<{ index: number; model: SlideModel; meta?: PresentationMeta } | null> {
   const e = (redo ? pres.redoStack : pres.undoStack).pop()
   if (!e) return null
   ;(redo ? pres.undoStack : pres.redoStack).push(e)
-  pres.pkg.setPart(e.path, redo ? e.after : e.before)
-  // 同一次编辑改动的其它 part（如图表的嵌入工作簿）
-  for (const x of e.extra ?? []) pres.pkg.setPart(x.path, redo ? x.after : x.before)
+  await applyUndoSnap(pres, e, !redo)
+  if (e.refresh) {
+    // 幻灯片级操作：重读 presentation.xml，刷新页列表后按 index 返回该页模型
+    const meta = await refreshMeta(pres)
+    pres.invalidateTheme()
+    const index = Math.max(0, Math.min(e.index ?? 0, meta.slides.length - 1))
+    return { index, model: await pres.slide(index), meta }
+  }
   const isSlide = pres.meta.slides.some((s) => s.path === e.path)
   // 主题 / 母版 / 版式 part 改动 undo 后必须清缓存，否则 slide() 仍读旧主题
   if (!isSlide) pres.invalidateTheme()
@@ -628,6 +645,19 @@ export async function shapeOps(pres: PptxPresentation, index: number, ops: Shape
       const i = tree.c.findIndex((c) => isNode(c) && idOf(c) === top)
       return i >= 0 ? { node: tree.c[i] as RNode, i } : undefined
     }
+    /** 内容/格式 op 的精确命中：顶层落空后下钻 grpSp，按元素自身 id 找组内子形状 */
+    const findById = (id: number): RNode | undefined => {
+      let found: RNode | undefined
+      for (const c of tree.c) {
+        if (!isNode(c) || local(c.q) !== 'grpSp') continue
+        walkOoxml(c as RNode, (n) => {
+          if (found) return true
+          if (idOf(n) === id) { found = n; return true }
+        })
+        if (found) break
+      }
+      return found
+    }
     for (const op of slideOps) {
       // 已在 partOps / dgmText / chartData 预处理；此处仅保留以收窄联合类型
       if (op.op === 'themeColor' || op.op === 'masterBg' || op.op === 'setLayout' || op.op === 'dgmText' || op.op === 'chartData') continue
@@ -650,17 +680,27 @@ export async function shapeOps(pres: PptxPresentation, index: number, ops: Shape
         continue
       }
       if (op.op === 'anchor') {
-        let body: RNode | undefined
-        walkOoxml(tree, (c) => {
-          if (body) return true
-          if (local(c.q) === 'sp' && Number(getAttr(kidOf(kidOf(c, 'nvSpPr'), 'cNvPr') ?? c, 'id')) === op.sid) body = kidOf(kidOf(c, 'txBody'), 'bodyPr')
-        })
-        if (body) setAttr(body, 'anchor', op.anchor)
+        // 视图发元素自身 id（组内子形状 = 子 id）：顶层落空后下钻组
+        const node = find(op.top)?.node ?? findById(op.top)
+        if (!node) continue
+        if (local(node.q) === 'graphicFrame') {
+          // 表格：每个单元格的 a:tcPr@anchor
+          walkOoxml(node, (c) => { if (local(c.q) === 'tcPr') setAttr(c, 'anchor', op.anchor) })
+        } else {
+          // sp / cxnSp（含组内子形状）：写 a:bodyPr@anchor
+          const body = (local(node.q) === 'sp' || local(node.q) === 'cxnSp') ? kidOf(kidOf(node, 'txBody'), 'bodyPr') : undefined
+          if (body) setAttr(body, 'anchor', op.anchor)
+        }
         continue
       }
+      // 结构 op（xfrm/delete/order/duplicate）只作用顶层（组内子形状坐标在 child-space，
+      // 选中组 = 移动整组，与 PowerPoint 一致）；内容/格式 op（fill/line/cellText/
+      // shapeText/tblRow/tblCol）落空后按元素自身 id 下钻 grpSp 精确命中。
       const hit = find(op.top)
-      if (!hit) continue
-      const { node, i } = hit
+      const STRUCTURAL = op.op === 'xfrm' || op.op === 'delete' || op.op === 'order' || op.op === 'duplicate'
+      const node = STRUCTURAL ? hit?.node : hit?.node ?? findById(op.top)
+      if (!node) continue
+      const i = hit ? hit.i : -1
       switch (op.op) {
         case 'xfrm':
           setXfrm(node, op.box, A, P)
@@ -673,16 +713,8 @@ export async function shapeOps(pres: PptxPresentation, index: number, ops: Shape
           break
         }
         case 'shapeText': {
-          // find(top) 命中顶层 p:sp；组内 p:sp 的 top 指组节点，需在组内按自身 id 再找
-          let sp = local(node.q) === 'sp' && idOf(node) === op.top ? node : undefined
-          if (!sp) {
-            walkOoxml(node, (c) => {
-              if (sp) return true
-              if (local(c.q) === 'sp' && idOf(c) === op.top) { sp = c; return true }
-              return false
-            })
-          }
-          if (sp) setShapeText(sp, op.lines, A)
+          // node 已按自身 id 精确命中（顶层或组内子形状）
+          if (local(node.q) === 'sp') setShapeText(node, op.lines, A)
           break
         }
         case 'tblRow':
@@ -838,7 +870,7 @@ async function newSlideXml(pres: PptxPresentation, layoutPath: string | undefine
   )
 }
 
-async function insertSlidePart(pres: PptxPresentation, after: number, xml: string, rels: string): Promise<void> {
+async function insertSlidePart(pres: PptxPresentation, after: number, xml: string, rels: string): Promise<string> {
   const path = pres.pkg.freeName('ppt/slides', 'slide', 'xml')
   pres.pkg.setPart(path, xml)
   pres.pkg.setPart(relsPathFor(path), rels)
@@ -853,6 +885,50 @@ async function insertSlidePart(pres: PptxPresentation, after: number, xml: strin
   lst.c.splice(at, 0, entry)
   lst.self = false
   pres.pkg.setPart(pres.mainPath, serialize(nodes))
+  return path
+}
+
+const CT_PATH = '[Content_Types].xml'
+
+/** XML part 的当前快照（null = 不存在）；幻灯片级操作涉及的 part 全是 XML，用文本比较即可判变化 */
+async function snapText(pres: PptxPresentation, path: string): Promise<PartSnap> {
+  return pres.pkg.has(path) ? await pres.pkg.text(path) : null
+}
+
+/** 操作前快照一批 part（顺序决定 undo 条目主 part，presentation.xml 放最前） */
+async function snapBefore(pres: PptxPresentation, paths: string[]): Promise<Map<string, PartSnap>> {
+  const m = new Map<string, PartSnap>()
+  for (const p of paths) m.set(p, await snapText(pres, p))
+  return m
+}
+
+/**
+ * 操作后 diff 压栈：变化的 part 全部还原得回去（新建 = before null，删除 = after null）。
+ * `created` 为操作前不存在的新 part 路径；`commentsDel` 为随页删除摘除的批注。
+ */
+async function recordSlideOp(pres: PptxPresentation, index: number, before: Map<string, PartSnap>, created: string[] = [], commentsDel?: DocComment[]): Promise<void> {
+  const snaps: { path: string; before: PartSnap; after: PartSnap }[] = []
+  for (const [p, b] of before) {
+    const a = await snapText(pres, p)
+    if (a !== b) snaps.push({ path: p, before: b, after: a })
+  }
+  for (const p of created) {
+    const a = await snapText(pres, p)
+    if (a !== null) snaps.push({ path: p, before: null, after: a })
+  }
+  if (!snaps.length && !commentsDel?.length) return
+  const [head, ...rest] = snaps
+  pres.undoStack.push({
+    path: head?.path ?? pres.mainPath,
+    before: head?.before ?? null,
+    after: head?.after ?? null,
+    index,
+    extra: rest.length ? rest : undefined,
+    refresh: true,
+    commentsDel,
+  })
+  if (pres.undoStack.length > 200) pres.undoStack.shift()
+  pres.redoStack = []
 }
 
 export async function slideOp(pres: PptxPresentation, op: SlideOp): Promise<PresentationMeta> {
@@ -866,7 +942,9 @@ export async function slideOp(pres: PptxPresentation, op: SlideOp): Promise<Pres
       const rels = layout
         ? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${LAYOUT_REL}" Target="../slideLayouts/${layout.split('/').pop()}"/></Relationships>`
         : '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>'
-      await insertSlidePart(pres, op.after, xml, rels)
+      const before = await snapBefore(pres, [pres.mainPath, relsPathFor(pres.mainPath), CT_PATH])
+      const newPath = await insertSlidePart(pres, op.after, xml, rels)
+      await recordSlideOp(pres, op.after + 1, before, [newPath, relsPathFor(newPath)])
       break
     }
     case 'duplicate': {
@@ -881,36 +959,46 @@ export async function slideOp(pres: PptxPresentation, op: SlideOp): Promise<Pres
       const rroot = rootEl(rn)!
       rroot.c = rroot.c.filter((c) => !(isNode(c) && (/notesSlide$/.test(getAttr(c, 'Type') ?? '') || isCommentRel(getAttr(c, 'Type') ?? ''))))
       rels = serialize(rn)
-      await insertSlidePart(pres, op.index, xml, rels)
+      const before = await snapBefore(pres, [pres.mainPath, relsPathFor(pres.mainPath), CT_PATH])
+      const newPath = await insertSlidePart(pres, op.index, xml, rels)
+      await recordSlideOp(pres, op.index + 1, before, [newPath, relsPathFor(newPath)])
       break
     }
     case 'delete': {
       const s = slides[op.index]
       if (!s || slides.length <= 1) break
+      const srels = await pres.pkg.rels(s.path)
+      const notes = relOfType(srels, 'notesSlide')?.target
+      // its comments go with it
+      const comments = [...srels.values()].filter((r) => !r.external && isCommentRel(r.type)).map((r) => r.target)
+      const doomed = [s.path, ...(notes ? [notes] : []), ...comments]
+      const parts = [pres.mainPath, relsPathFor(pres.mainPath), CT_PATH]
+      for (const p of doomed) parts.push(p, relsPathFor(p))
+      const before = await snapBefore(pres, parts)
       const { nodes, lst } = await presNodes(pres)
       const rels = await pres.pkg.rels(pres.mainPath)
       const entry = kidsOf(lst, 'sldId').find((x) => rels.get(getAttr(x, 'r:id') ?? '')?.target === s.path)
       if (entry) lst.c.splice(lst.c.indexOf(entry), 1)
       pres.pkg.setPart(pres.mainPath, serialize(nodes))
-      const srels = await pres.pkg.rels(s.path)
-      const notes = relOfType(srels, 'notesSlide')?.target
-      // its comments go with it
-      const comments = [...srels.values()].filter((r) => !r.external && isCommentRel(r.type)).map((r) => r.target)
+      const del: DocComment[] = []
       for (const t of pres.comments.threads()) {
         const a = t.root.at
         if (!a || !('slide' in a) || a.slide !== s.path) continue
+        del.push(t.root, ...t.replies)
         for (const r of t.replies) pres.comments.set(r.id, null)
         pres.comments.set(t.root.id, null)
       }
       await pres.pkg.removeRelsTo(pres.mainPath, s.path)
-      for (const part of [s.path, notes, ...comments].filter(Boolean) as string[]) {
+      for (const part of doomed) {
         pres.pkg.setPart(part, null)
         if (pres.pkg.has(relsPathFor(part))) pres.pkg.setPart(relsPathFor(part), null)
         await pres.pkg.setContentType(part, null)
       }
+      await recordSlideOp(pres, op.index, before, [], del.length ? del : undefined)
       break
     }
     case 'move': {
+      const before = await snapBefore(pres, [pres.mainPath])
       const { nodes, lst } = await presNodes(pres)
       const items = kidsOf(lst, 'sldId')
       const item = items[op.from]
@@ -920,14 +1008,17 @@ export async function slideOp(pres: PptxPresentation, op: SlideOp): Promise<Pres
       const at = op.to >= rest.length ? lst.c.length : lst.c.indexOf(rest[op.to])
       lst.c.splice(at, 0, item)
       pres.pkg.setPart(pres.mainPath, serialize(nodes))
+      await recordSlideOp(pres, op.to, before)
       break
     }
     case 'hide': {
       const s = slides[op.index]
       if (!s) break
+      const before = await snapBefore(pres, [s.path])
       const nodes = parseRaw(await pres.pkg.text(s.path))
       setAttr(rootEl(nodes)!, 'show', op.hidden ? '0' : undefined)
       pres.pkg.setPart(s.path, serialize(nodes))
+      await recordSlideOp(pres, op.index, before)
       break
     }
   }

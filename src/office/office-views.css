@@ -133,7 +133,9 @@
 }
 
 .ov-grid-scroll { flex: 1; min-height: 0; overflow: auto; }
-.ov-grid { position: relative; user-select: none; }
+/* 拖选只出选区底纹/外框，绝不出浏览器原生文字选区（报障①）。
+   WKWebView 只认带前缀的 -webkit-user-select，漏前缀 = 单元格文字被选中（单词级紫底）。 */
+.ov-grid { position: relative; -webkit-user-select: none; user-select: none; }
 
 .ov-corner {
   position: absolute;
@@ -174,6 +176,9 @@
   border-right: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   font-size: 11px;
+  /* 行头/列头的字母数字也是文本，同样显式锁（报障①） */
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .ov-col-head { height: 26px; }
@@ -213,6 +218,10 @@
   overflow: hidden;
   white-space: nowrap;
   cursor: cell;
+  /* 报障①：user-select 非继承属性，auto 的 inherit-like 行为在 WKWebView 不可靠——
+     单元层面显式锁死，文字选区无从产生 */
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .ov-cell-num { justify-content: flex-end; }
@@ -317,6 +326,9 @@
   color: var(--text);
   font: inherit;
   outline: none;
+  /* 网格整体禁选，编辑框内必须恢复：选字复制/删除是正常编辑操作 */
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .ov-sheet-tabs {

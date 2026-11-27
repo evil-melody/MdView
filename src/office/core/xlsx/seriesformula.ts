@@ -47,8 +47,9 @@ export interface SeriesCellSpec {
  *  - date/day：同样按 serial 链式 `=A1+step`（保留起始格日期 numFmt）。
  *  - date/month、date/year：必须**从起点**计算（EDATE 自带月末回退）。链式 EDATE 会让
  *    1/31 → 2/28 → 3/28，丢掉静态语义的 3/31；起点格用相对引用，整段平移时引用随格一起平移。
- *  - date/weekday：引擎无 WORKDAY，链式表达式只能精确表达 step=1，其余会偏离
- *    「从起点推进 step*i 个工作日」的静态语义，故保留静态值（Excel 工作日序列本身也是静态日期）。
+ *  - date/weekday：同样**从起点**计算 `WORKDAY(起点, eff*i)`——链式 WORKDAY 每格只走 1 个工作日
+ *    看似等价，但起点落在周末/被跳过日时链式与起点式发散，且 step>1 时链式无法表达「每步跨
+ *    step 个工作日」；eff 与静态递推同源（`max(1, round(step))`，见 series.ts dateStepValue）。
  */
 export function seriesCellFormula(s: SeriesCellSpec): string | null {
   if (s.srcIsIsoDate) return null
@@ -62,7 +63,9 @@ export function seriesCellFormula(s: SeriesCellSpec): string | null {
       const months = (s.unit === 'year' ? 12 : 1) * s.step * s.i
       return `EDATE(${a1(s.sr, s.sc)},${months})`
     }
-    return null // weekday：引擎无 WORKDAY，保留静态值
+    // weekday：与 dateStepValue 静态递推同一 eff 步长口径（max(1, round(step))），i=0 不出公式
+    const eff = Math.max(1, Math.round(s.step))
+    return `WORKDAY(${a1(s.sr, s.sc)},${eff * s.i})`
   }
   return chained('arith') // linear / auto
 }

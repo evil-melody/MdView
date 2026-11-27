@@ -90,6 +90,7 @@ const RAW: Record<string, string> = {
   N: 'value|Value converted to a number.',
   NA: '|The error value #N/A.',
   NETWORKDAYS: 'start_date, end_date, [holidays]|Number of working days between two dates.',
+  WORKDAY: 'start_date, days, [holidays]|Date that is the given number of working days before or after a date.',
   NOT: 'logical|Reverses a logical value.',
   NOW: '|Current date and time.',
   ODD: 'number|Rounds up to the nearest odd integer.',

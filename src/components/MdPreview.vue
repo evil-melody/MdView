@@ -128,12 +128,22 @@ async function streamRender(content: string) {
 
 /** 所见即所得编辑回写时记录最后发出的源，避免父层回写 props.content 触发整页重渲染（丢光标） */
 const lastEmitted = ref('')
+/** lastEmitted 所属文档：守卫必须带文档维度——组件实例跨页签持续，
+ *  编辑 A → 切 B → 切回 A 时 content=A' === lastEmitted，若无条件跳过则 DOM 残留 B */
+let lastDoc = ''
 
-/** 内容变化：增量解析 + 流式注入，正文逐段出现。
- *  自己编辑回写的 content 与 lastEmitted 相同 → 跳过重渲染。 */
+/** 内容或文档变化：增量解析 + 流式注入，正文逐段出现。
+ *  同一文档内、自己编辑回写的 content 与 lastEmitted 相同 → 跳过重渲染；
+ *  docPath 变化（切页签）必渲染，且双源联合监听覆盖两页签 content 相同的切换场景。 */
 watch(
-  () => props.content,
-  (c) => {
+  [() => props.content, () => props.docPath],
+  ([c, d], [prevC, prevD]) => {
+    if (d !== lastDoc) {
+      lastDoc = d
+      lastEmitted.value = ''
+    } else if (c === prevC) {
+      return // 仅 docPath 占位抖动（如 entry 短暂为 null）而内容未变
+    }
     if (c === lastEmitted.value) return
     void streamRender(c)
   },

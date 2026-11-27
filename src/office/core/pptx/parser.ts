@@ -10,7 +10,7 @@ import { OpcPackage, relOfType, relsOfType, type Rels } from '../opc'
 import { parseTheme, type Theme } from '../theme'
 import { emuToPx } from '../units'
 import { kid, kids, num, path, textOf, type XEl } from '../xml'
-import type { Box, Fill, PParaSpec, PresentationMeta, PRunSet, SlideEl, SlideModel, SlideThemeInfo, Stroke, TCell, TextBody, TPara, TRun } from './types'
+import type { Box, Fill, PParaSpec, PresentationMeta, PRunSet, SlideEl, SlideModel, SlideThemeInfo, Stroke, TCell, TextBody, TPara, TRun, UndoEntry } from './types'
 import {
   clone, el, escText, getAttr, isNode, kidOf, kidsOf, local, parseRaw, prefixOf, removeKids, serialize, setAttr, setOrdered, walkOoxml,
   type RChild, type RNode,
@@ -314,7 +314,8 @@ export class PptxPresentation {
     // parseTimingX 取每个 spid 首个效果贴到 el.anim（el.anim 为单值，供旧视图 / CSS 类兼容）。
     const animSeq = parseTimingListX(slide.root)
     const anims = parseTimingX(slide.root)
-    if (anims.size) for (const el of els) if (el.top !== undefined && anims.has(el.top)) el.anim = anims.get(el.top)
+    // 动画 spid 指向形状自身 id（组内子形状 ≠ top=组 id），按 oid 贴附
+    if (anims.size) for (const el of els) { const aid = el.oid ?? el.top; if (aid !== undefined && anims.has(aid)) el.anim = anims.get(aid) }
     const transition = parseTransitionX(slide.root)
     return {
       index,
@@ -386,11 +387,9 @@ export class PptxPresentation {
   private genMaps = new Map<string, GenPara[]>()
   /** structural edits (shapes, slides) */
   touched = false
-  /** shape edits (slide XML before / after) for undo; text edits drop the entries of their slide.
-   *  `index` 记录编辑影响的幻灯片，供 theme/master/layout 等非 slide part 的 undo 刷新用。
-   *  `extra` 记录同一次编辑改动的其它 part（如图表的嵌入工作簿，二进制）。 */
-  undoStack: { path: string; before: string | Uint8Array; after: string | Uint8Array; index?: number; extra?: { path: string; before: Uint8Array; after: Uint8Array }[] }[] = []
-  redoStack: { path: string; before: string | Uint8Array; after: string | Uint8Array; index?: number; extra?: { path: string; before: Uint8Array; after: Uint8Array }[] }[] = []
+  /** shape edits (slide XML before / after) for undo; text edits drop the entries of their slide. */
+  undoStack: UndoEntry[] = []
+  redoStack: UndoEntry[] = []
   private originals = new Map<string, string>()
   private lateShapes = new Map<string, string>()
 
@@ -888,7 +887,13 @@ class SlideRenderer {
       } catch {
         // a single malformed shape must not break the slide
       }
-      if (myTop !== undefined) for (let k = start; k < out.length; k++) out[k].top = myTop
+      // oid = 元素自身 id（组内子形状 ≠ top=组 id）；格式/锚/动画通道按 oid 精确命中。
+      // 仅 slide part 自身参与（master/layout 元素 id 空间独立，混入会误贴动画）。
+      const ownId = part === this.slide && idAttr ? Number(idAttr) : undefined
+      for (let k = start; k < out.length; k++) {
+        if (myTop !== undefined) out[k].top = myTop
+        if (ownId !== undefined && out[k].oid === undefined) out[k].oid = ownId
+      }
     }
   }
 

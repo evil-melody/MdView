@@ -326,7 +326,7 @@ export interface FindMatch {
 // regenerates the real OOXML parts (chart parts, conditionalFormatting + dxfs, dataValidations,
 // slicer parts, pivot parts) from them on every write, so save → reopen → read back is 1:1.
 
-export type ChartKind = 'col' | 'bar' | 'line' | 'pie'
+export type ChartKind = 'col' | 'bar' | 'line' | 'pie' | 'area' | 'scatter'
 export interface ChartSeries { name: string; values: number[] }
 export interface ChartData { cats: string[]; series: ChartSeries[] }
 

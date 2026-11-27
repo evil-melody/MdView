@@ -76,6 +76,30 @@ function networkdays(s: number, e: number, holidays: Set<number>): number {
   return sign * n
 }
 
+/**
+ * WORKDAY(start, days, [holidays])：sdkjs cWORKDAY.Calculate（dateandtimeFunctions.js:2455-2505）。
+ * 逐日 ±1 步进、跳过周末与节假日，累计到 |days| 个工作日为止；days=0 原样返回起点；
+ * floor(days)；起点 <0 由 `day()` 抛 NUM、结果 <0 抛 NUM（对齐 `val0<0 / val<0 → not_numeric`）。
+ * 周末判定走 `serialToYmd().dow`（0=周日 / 6=周六）——与 networkdays **同一原语**，禁造第二套。
+ * serial<60 的 1900 虚构闰日偏移：serialToYmd 的 dow=((n-1)%7) 与 sdkjs calcDate 的
+ * `argVal0<60 → getUTCDay()-1` 修正**全域恒等**（n≥61 时 (n-1)%7 ≡ 真实 getUTCDay；n<60 两者
+ * 同幅平移），也与 series.ts dateStepValue 的纯 serial%7 递推（sat=0/sun=1）逐点一致——
+ * x23 B 节静态回环锁死这条恒等。
+ */
+function workday(start: number, days: number, holidays: Set<number>): number {
+  const t = Math.floor(days)
+  const diff = Math.sign(t)
+  let cur = start
+  let cnt = 0
+  while (cnt !== t) {
+    cur += diff
+    const dow = serialToYmd(cur).dow
+    if (dow !== 0 && dow !== 6 && !holidays.has(cur)) cnt += diff
+  }
+  if (cur < 0) throw ERR.NUM
+  return cur
+}
+
 export const DATE: Record<string, FnDef> = {
   TODAY: A(0, 0, (_a, ev) => Math.floor(dateToSerial(ev.now()))),
   NOW: A(0, 0, (_a, ev) => dateToSerial(ev.now())),
@@ -111,5 +135,9 @@ export const DATE: Record<string, FnDef> = {
   NETWORKDAYS: A(2, 3, (a, ev) => {
     const hol = new Set(a.length > 2 ? nums([a[2]], ev).map(Math.floor) : [])
     return networkdays(day(ev.scalar(a[0])), day(ev.scalar(a[1])), hol)
+  }),
+  WORKDAY: A(2, 3, (a, ev) => {
+    const hol = new Set(a.length > 2 ? nums([a[2]], ev).map(Math.floor) : [])
+    return workday(day(ev.scalar(a[0])), num(ev.scalar(a[1])), hol)
   }),
 }

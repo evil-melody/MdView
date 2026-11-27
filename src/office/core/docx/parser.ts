@@ -924,6 +924,9 @@ export class DocxDocument {
       const root = await pkg.xml(setRel.target)
       const eao = root ? kid(root, 'evenAndOddHeaders') : undefined
       doc.evenOdd = !!eao && eao.a.val !== '0' && eao.a.val !== 'false'
+      // 「修订」开关同样住在 settings.xml（w:trackChanges）
+      const tr = root ? kid(root, 'trackChanges') : undefined
+      doc.track = !!tr && tr.a.val !== '0' && tr.a.val !== 'false'
       // compatibilityMode（compat.ts）：表距种子门控；缺省 Word12（sdkjs Current）
       doc.compatMode = parseCompatMode(root)
     }
@@ -950,6 +953,10 @@ export class DocxDocument {
   titlePg = false
   /** w:evenAndOddHeaders in settings.xml as read from the file */
   evenOdd = false
+  /** "record every change" (w:trackChanges in settings.xml) as read from the file */
+  track = false
+  /** "record every change" as set by the editor (undefined: as in the file) */
+  trackSet?: boolean
   /** settings.xml compatibilityMode（缺省 Word12 = sdkjs Current；表距种子门控，compat.ts） */
   compatMode = 12
   /** "different odd / even pages" as set by the editor (undefined: as in the file) */
@@ -1078,7 +1085,7 @@ export class DocxDocument {
     this.captured = true
     const sect = finalSect
     this.page = pageSetup(sect)
-    const meta: DocxMeta = { page: { ...this.page }, ...baseMeta, final: true, evenAndOddHeaders: this.evenOddSet ?? this.evenOdd }
+    const meta: DocxMeta = { page: { ...this.page }, ...baseMeta, final: true, evenAndOddHeaders: this.evenOddSet ?? this.evenOdd, trackChanges: this.trackSet ?? this.track }
     if (sect) {
       meta.sectKind = kid(sect, 'type')?.a.val ?? 'nextPage'
       const ref = (tag: string, type: string) => kids(sect, tag).find((r) => (r.a.type ?? 'default') === type)?.a['r:id']

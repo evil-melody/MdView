@@ -134,35 +134,61 @@ export function chartSpaceXml(chart: ChartFeature, sheetName: string): string {
   const q = (s: string) => `'${sheetName.replace(/'/g, "''")}'`
   const n = chart.data.cats.length
   const catRef = `${q(sheetName)}!$${colName(chart.source.c0)}$${chart.source.r0 + 2}:$${colName(chart.source.c0)}$${chart.source.r0 + 1 + n}`
+  const isPie = chart.kind === 'pie'
+  const isLine = chart.kind === 'line'
+  const isArea = chart.kind === 'area'
+  const isScatter = chart.kind === 'scatter'
+  const barDir = chart.kind === 'bar' ? 'bar' : 'col'
   const sers = chart.data.series.map((s, si) => {
     const col = chart.source.c0 + 1 + si
     const txRef = `${q(sheetName)}!$${colName(col)}$${chart.source.r0 + 1}`
     const valRef = `${q(sheetName)}!$${colName(col)}$${chart.source.r0 + 2}:$${colName(col)}$${chart.source.r0 + 1 + n}`
     const colour = PALETTE[si % PALETTE.length]
-    return (
+    const head =
       `<c:ser><c:idx val="${si}"/><c:order val="${si}"/>` +
       `<c:tx>${strCache(txRef, [s.name])}</c:tx>` +
-      `<c:spPr><a:solidFill><a:srgbClr val="${colour}"/></a:solidFill></c:spPr>` +
-      `<c:invertIfNegative val="0"/>` +
+      `<c:spPr><a:solidFill><a:srgbClr val="${colour}"/></a:solidFill></c:spPr>`
+    // 散点图：两轴皆数值，系列用 xVal/yVal（x = 分类列解出的数值，解不出按序号 1..n）；
+    // scatterStyle="lineMarker" 自带标记，ser 内不再放 <c:marker>（其 schema 是复合格）
+    if (isScatter) {
+      const xs = chart.data.cats.map((c, i) => numOf(c) ?? i + 1)
+      return head +
+        `<c:xVal>${numCache(catRef, xs)}</c:xVal>` +
+        `<c:yVal>${numCache(valRef, s.values)}</c:yVal>` +
+        `</c:ser>`
+    }
+    // CT_LineSer 不含 invertIfNegative（其余图型的 ser 都有）
+    return head +
+      (isLine ? '' : `<c:invertIfNegative val="0"/>`) +
       `<c:cat>${strCache(catRef, chart.data.cats)}</c:cat>` +
       `<c:val>${numCache(valRef, s.values)}</c:val>` +
       `</c:ser>`
-    )
   }).join('')
-  const isPie = chart.kind === 'pie'
-  const isLine = chart.kind === 'line'
-  const barDir = chart.kind === 'bar' ? 'bar' : 'col'
   let plot: string
   if (isPie) {
     plot = `<c:pieChart><c:varyColors val="1"/>${sers}</c:pieChart>`
   } else if (isLine) {
     plot = `<c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>${sers}<c:marker val="1"/><c:axId val="111111111"/><c:axId val="222222222"/></c:lineChart>`
+  } else if (isArea) {
+    plot = `<c:areaChart><c:grouping val="standard"/><c:varyColors val="0"/>${sers}<c:axId val="111111111"/><c:axId val="222222222"/></c:areaChart>`
+  } else if (isScatter) {
+    plot = `<c:scatterChart><c:scatterStyle val="lineMarker"/><c:varyColors val="0"/>${sers}<c:axId val="111111111"/><c:axId val="222222222"/></c:scatterChart>`
   } else {
     plot = `<c:barChart><c:barDir val="${barDir}"/><c:grouping val="clustered"/><c:varyColors val="0"/>${sers}<c:gapWidth val="150"/><c:axId val="111111111"/><c:axId val="222222222"/></c:barChart>`
   }
-  const axes = isPie ? '' :
-    `<c:catAx><c:axId val="111111111"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="${barDir === 'bar' ? 'l' : 'b'}"/><c:crossAx val="222222222"/></c:catAx>` +
-    `<c:valAx><c:axId val="222222222"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="${barDir === 'bar' ? 'b' : 'l'}"/><c:numFmt formatCode="General" sourceLinked="1"/><c:majorGridlines/><c:crossAx val="111111111"/></c:valAx>`
+  // 散点图两轴都必须是 valAx（数值轴）；其余带分类轴的用 catAx/valAx 组合
+  let axes = ''
+  if (!isPie) {
+    if (isScatter) {
+      axes =
+        `<c:valAx><c:axId val="111111111"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:numFmt formatCode="General" sourceLinked="1"/><c:majorGridlines/><c:crossAx val="222222222"/></c:valAx>` +
+        `<c:valAx><c:axId val="222222222"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:numFmt formatCode="General" sourceLinked="1"/><c:majorGridlines/><c:crossAx val="111111111"/></c:valAx>`
+    } else {
+      axes =
+        `<c:catAx><c:axId val="111111111"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="${barDir === 'bar' ? 'l' : 'b'}"/><c:crossAx val="222222222"/></c:catAx>` +
+        `<c:valAx><c:axId val="222222222"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="${barDir === 'bar' ? 'b' : 'l'}"/><c:numFmt formatCode="General" sourceLinked="1"/><c:majorGridlines/><c:crossAx val="111111111"/></c:valAx>`
+    }
+  }
   const title = chart.title
     ? `<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>${esc(chart.title)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title><c:autoTitleDeleted val="0"/>`
     : `<c:autoTitleDeleted val="1"/>`

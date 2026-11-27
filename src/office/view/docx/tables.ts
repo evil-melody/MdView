@@ -170,6 +170,20 @@ export function cellsIn(t: Table, r: CellRect): GridCell[] {
   return gridOf(t).cells.filter((c) => c.ri >= r.r0 && c.ri <= r.r1 && c.g >= r.g0 && c.g <= r.g1)
 }
 
+/** Word 表格 Delete：覆盖格只清文字，保留表格/格/段落结构 */
+export function clearCellsText(t: Table, r: CellRect): Table {
+  const hits = new Set(cellsIn(t, r).map((c) => `${c.ri}:${c.ci}`))
+  return {
+    ...t,
+    rows: t.rows.map((row, ri) => ({
+      ...row,
+      cells: row.cells.map((cell, ci) => hits.has(`${ri}:${ci}`)
+        ? { ...cell, blocks: cell.blocks.map((b) => (b.t === 'p' ? { ...b, runs: [], edited: true } : b)) }
+        : cell)
+    }))
+  }
+}
+
 const blankPara = (p: Block) => p.t === 'p' && !p.runs.some((x) => x.t !== 'text' || x.text.length > 0)
 
 /** Merges every cell of the rectangle into its top-left one (contents kept, in reading order). Null: nothing to merge. */

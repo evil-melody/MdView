@@ -427,13 +427,16 @@ export interface HFSet {
   titlePg?: boolean
   /** different odd / even pages (w:evenAndOddHeaders in settings.xml) */
   evenAndOddHeaders?: boolean
+  /** "record every change" (w:trackChanges in settings.xml) */
+  trackChanges?: boolean
 }
-
 export interface HFSetResult {
   headers: HeaderFooters
   titlePg: boolean
   /** different odd / even pages as it stands now */
   evenAndOddHeaders: boolean
+  /** "record every change" as it stands now */
+  trackChanges?: boolean
   /** the change that puts the headers / footers back */
   undo: HFSet
 }
@@ -561,6 +564,8 @@ export interface DocxMeta {
   titlePg?: boolean
   /** w:evenAndOddHeaders in settings.xml: even pages use the "even" header / footer parts */
   evenAndOddHeaders?: boolean
+  /** w:trackChanges in settings.xml: edits are recorded as tracked changes ("修订") */
+  trackChanges?: boolean
   /** settings.xml compatibilityMode（缺省 12 = sdkjs Current；新建表宽预算 nAdd 门控） */
   compatMode?: number
   /** body default font (CSS) and size */

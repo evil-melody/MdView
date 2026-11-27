@@ -389,20 +389,27 @@ async function runViewTests() {
     }
   } catch (e) { dbg.errB = String(e) }
 
-  // ---- 阶段 C：Ctrl+A（面板打开时）+ .ov-corner ----
+  // ---- 阶段 C：Ctrl+A（面板打开时）+ .ov-corner（P9a 语义：全选 = 当前表数据区）----
+  // 数据区实测：列 0 表头+6 行（r0..6）、列 5..9 序列（A1 起 F1=100..J1=104）→ used = 7×10。
+  // 断言锁范围而非只锁标签：旧「无限网格全选」（r1/c1 到 padding 轴尾）在新语义下必挂。
   try {
+    const USED = { r0: 0, c0: 0, r1: 6, c1: 9 }
+    const rangeIs = (g: { r0: number; c0: number; r1: number; c1: number } | null) =>
+      !!g && g.r0 === USED.r0 && g.c0 === USED.c0 && g.r1 === USED.r1 && g.c1 === USED.c1
     mark('C.ctrlA')
     ;(document.activeElement as HTMLElement | null)?.blur?.()
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true, cancelable: true }))
     await wait(120)
-    out.ctrlA = nameIs('全选')
+    out.ctrlA = nameIs('全选') && rangeIs(view.commands.rangeSel?.())
+    dbg.ctrlARange = view.commands.rangeSel?.()
     ;(document.querySelector('.ov-flt-overlay') as HTMLElement | null)?.click()
     await wait(80)
     clickCell(2, 2); await wait(60)
     mark('C.corner')
     ;(document.querySelector('.ov-corner') as HTMLElement | null)?.click()
     await wait(120)
-    out.corner = nameIs('全选')
+    out.corner = nameIs('全选') && rangeIs(view.commands.rangeSel?.())
+    dbg.cornerRange = view.commands.rangeSel?.()
   } catch (e) { dbg.errC = String(e) }
 
   dbg.viewErrors = [...viewErrors]
