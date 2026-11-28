@@ -72,6 +72,13 @@
   height: 100%;
 }
 
+/* 代码编辑滚动面：底色恒深，标准属性切经典常显淡滚动条（同 .code-view，
+   WKWebView 实证 scrollbar-width 生效；内容长短可感知） */
+.cde-host .cm-scroller {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-static-on-dark) transparent;
+}
+
 .cde-host .cm-editor.cm-focused {
   outline: none !important;
 }

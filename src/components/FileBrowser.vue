@@ -147,7 +147,7 @@ function summaryFull(p: string): string {
   <div class="fb" :class="{ side: variant === 'side' }">
     <div class="toolbar">
       <template v-if="variant === 'side'">
-        <div class="crumbs scrollable">
+        <div class="crumbs">
           <span class="crumb" :title="currentDir">{{ currentDir.split('/').filter(Boolean).pop() || '文件' }}</span>
         </div>
         <div class="side-tools">
@@ -182,19 +182,20 @@ function summaryFull(p: string): string {
           title="重新生成（忽略已有摘要缓存）"
           @click="emit('summarize', true)"
         >↻</button>
-        <div class="crumbs scrollable">
+        <div class="crumbs">
           <template v-if="searchActive">
             <span class="crumb search-crumb">搜索结果 ({{ entries.length }})</span>
           </template>
           <template v-else>
-            <span
-              v-for="(c, i) in breadcrumbs"
-              :key="c.path"
-              class="crumb"
-              :class="{ current: i === breadcrumbs.length - 1 }"
-              :title="'定位到 ' + c.path"
-              @click="emit('open-dir', c.path)"
-            >{{ c.name }}<span v-if="i < breadcrumbs.length - 1" class="sep"> / </span></span>
+            <template v-for="(c, i) in breadcrumbs" :key="c.path">
+              <span
+                class="crumb"
+                :class="{ current: i === breadcrumbs.length - 1 }"
+                :title="'定位到 ' + c.path"
+                @click="emit('open-dir', c.path)"
+              >{{ c.name }}</span>
+              <span v-if="i < breadcrumbs.length - 1" class="crumb-sep">/</span>
+            </template>
           </template>
         </div>
         <div class="search-box" @click="focusSearch">

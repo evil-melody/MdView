@@ -26,6 +26,11 @@
   --input-focus-bg: #24242e;
   --scrollbar-thumb: rgba(255, 255, 255, 0.18);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.34);
+  /* 文本/文档滚动面常显条（标准属性通道，实证 macOS 15.4 WKWebView 生效）：
+     thumb 永久驻留 → 比 overlay 深一档，淡而明确可感知；供 md/代码/textarea 用 */
+  --scrollbar-static: rgba(255, 255, 255, 0.3);
+  /* 恒深表面（code-view / CodeMirror 底色写死 #16161b，不随主题翻转）专用，两主题同值 */
+  --scrollbar-static-on-dark: rgba(255, 255, 255, 0.3);
   --radius: 12px;
   --radius-sm: 8px;
   --shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
@@ -56,6 +61,7 @@
   --input-focus-bg: #ffffff;
   --scrollbar-thumb: rgba(20, 24, 40, 0.16);
   --scrollbar-thumb-hover: rgba(20, 24, 40, 0.32);
+  --scrollbar-static: rgba(20, 24, 40, 0.28);
   --shadow: 0 8px 28px rgba(20, 24, 40, 0.12);
 }
 
@@ -92,9 +98,12 @@ textarea {
   overflow-y: auto;
 }
 
-/* 全局滚动条：不用类名限定，覆盖所有滚动容器（md-body / 树 / 弹窗 / 表格等），
-   只用 ::-webkit-scrollbar 定制（scrollbar-width 标准属性会让 WKWebView
-   忽略 webkit 伪元素、回退成带轨道的原生滚动条） */
+/* 全局滚动条 webkit 通道：不用类名限定，覆盖所有滚动容器（树 / 弹窗 / 表格等）。
+   实证（macOS 15.4 WKWebView 离屏探针）：webkit 伪元素与标准属性 scrollbar-width/color
+   两通道都是经典预留沟槽（8px / thin≈11px），并非 overlay——caniuse「WKWebView 不生效」
+   注记已过时。文本/文档滚动面（md 预览、代码预览/编辑、textarea）走标准属性通道
+   换更深的 --scrollbar-static thumb（overlay 16% 档太淡，内容长短感知不到），
+   见 PreviewPane / CodeEditor 各 css。标准属性生效的容器上 webkit 伪元素被忽略。 */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;

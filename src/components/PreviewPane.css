@@ -120,53 +120,54 @@
   position: relative;
 }
 
-/* 大纲：贴右竖条 tab + 展开悬浮面板（对标 InspireLoom） */
-.outline-tab {
+/* 大纲：右上角悬浮小按钮 + 下拉浮层（形态对标右下角 AI 助手 FAB）。
+   关键 = right 一律取 24px 而非 0：内容滚动条走标准属性通道是经典预留沟槽
+   （≈13px，见 global.css 注释），贴右缘的悬浮层必然压住它。让开 24px 后
+   按钮与浮层都在沟槽右侧，滚动条两态常驻可见。 */
+.ol-fab {
   position: absolute;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  width: 30px;
+  top: 12px;
+  right: 24px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding-top: 14px;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
   background: var(--panel);
-  border-left: 1px solid var(--border);
-  cursor: pointer;
   color: var(--text-3);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(20, 24, 40, 0.1);
   z-index: 6;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
 }
 
-.outline-tab:hover,
-.outline-tab.on {
+.ol-fab:hover,
+.ol-fab.on {
   color: var(--accent);
+  border-color: var(--accent);
   background: var(--accent-soft);
-}
-
-.ot-ico {
-  font-size: 13px;
-}
-
-.ot-text {
-  writing-mode: vertical-rl;
-  font-size: 11px;
-  letter-spacing: 0.15em;
 }
 
 .outline {
   position: absolute;
-  right: 30px;
-  top: 0;
-  bottom: 0;
-  width: 240px;
+  top: 52px;
+  right: 24px;
+  width: 260px;
+  max-width: calc(100% - 48px);
+  /* 顶 52 + 底留 12 = 64：浮层不触底，也不超出内容区 */
+  max-height: calc(100% - 64px);
   background: var(--panel);
-  border-left: 1px solid var(--border);
-  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(20, 24, 40, 0.16);
   display: flex;
   flex-direction: column;
-  padding: 12px 10px;
+  padding: 10px;
   z-index: 5;
 }
 
@@ -209,14 +210,16 @@
   letter-spacing: 0.06em;
 }
 
-.ol-slide-enter-active,
-.ol-slide-leave-active {
-  transition: transform 0.18s ease, opacity 0.18s ease;
+/* 下拉浮层：自按钮向下展开的轻微缩放 + 淡入 */
+.ol-pop-enter-active,
+.ol-pop-leave-active {
+  transition: transform 0.16s ease, opacity 0.16s ease;
+  transform-origin: top right;
 }
 
-.ol-slide-enter-from,
-.ol-slide-leave-to {
-  transform: translateX(16px);
+.ol-pop-enter-from,
+.ol-pop-leave-to {
+  transform: scale(0.94) translateY(-6px);
   opacity: 0;
 }
 
@@ -326,6 +329,11 @@
   line-height: 1.6;
   white-space: pre;
   tab-size: 4;
+  /* 底色恒深写死 → 滚动条用 on-dark 变体。标准属性 = WKWebView 唯一
+     经典常显通道（实证 macOS 15.4 认 scrollbar-width，切常显模式），
+     thumb 淡而常驻，内容长短可感知；track 透明不割背景 */
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-static-on-dark) transparent;
 }
 
 .code-view.wrap { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
@@ -340,12 +348,15 @@
   position: relative;
 }
 
-/* MdPreview 根节点即滚动容器：强制撑满父级才能滚动 */
+/* MdPreview 根节点即滚动容器：强制撑满父级才能滚动。
+   标准属性切经典常显淡滚动条（md 正文必见内容长度，见 .code-view 注释） */
 .flex1 > .md-body {
   flex: 1;
   height: 100%;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-static) transparent;
 }
 
 .editor-split {
@@ -384,6 +395,9 @@
   color: var(--text);
   tab-size: 2;
   overflow-wrap: anywhere;
+  /* 底色随主题翻转 → 主题自适应常显变量；经典常显同 md-body */
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-static) transparent;
 }
 
 /* 右键菜单关闭自动换行后，所有文本渲染面统一回到不换行 + 横向滚动 */

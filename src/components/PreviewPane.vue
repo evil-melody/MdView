@@ -1115,12 +1115,13 @@ defineExpose({ saveOffice, savePdf, openFind })
             <MindmapView :content="content" />
           </div>
 
-          <!-- 大纲：贴右侧竖条收缩，展开为悬浮面板（对标 InspireLoom） -->
-          <transition name="ol-slide">
+          <!-- 大纲：右上角悬浮小按钮 + 下拉浮层（同 AI 助手 FAB 形态）。
+               两者右缘都让开 24px —— 内容滚动条沟槽（≈13px）常驻可见，不被遮盖 -->
+          <transition name="ol-pop">
             <div v-if="showOutline && outlineOpen" class="outline">
               <div class="ol-head">
                 <span class="ol-title">大纲</span>
-                <button class="ol-close" title="收起大纲" @click="outlineOpen = false">»</button>
+                <button class="ol-close" title="收起大纲" @click="outlineOpen = false">×</button>
               </div>
               <div class="ol-list scrollable">
                 <div
@@ -1133,16 +1134,14 @@ defineExpose({ saveOffice, savePdf, openFind })
               </div>
             </div>
           </transition>
-          <div
+          <button
             v-if="showOutline"
-            class="outline-tab"
+            class="ol-fab"
             :class="{ on: outlineOpen }"
             title="大纲"
+            aria-label="大纲"
             @click="outlineOpen = !outlineOpen"
-          >
-            <span class="ot-ico">☰</span>
-            <span class="ot-text">{{ outlineOpen ? '收起' : '大纲' }}</span>
-          </div>
+          >☰</button>
         </div>
       </template>
 

@@ -50,28 +50,49 @@
   color: var(--accent-2);
 }
 
+/* 路径面包屑：与搜索框同高的胶囊容器，段内可横向滚动（超长路径不挤压两侧按钮）。
+   .scrollable 的全局 overflow-y 不适用横排，故由本类自持 overflow-x */
 .crumbs {
   flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
+  height: 34px;
+  padding: 0 12px;
   gap: 2px;
   overflow-x: auto;
+  overflow-y: hidden;
   white-space: nowrap;
   font-size: 13px;
   color: var(--text-2);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+/* 横向溢出时滚动条不占高度，保持与相邻控件同高 */
+.crumbs::-webkit-scrollbar {
+  height: 0;
 }
 
 .crumb {
   cursor: pointer;
-  padding: 2px 0;
+  color: var(--text-2);
+  border-radius: 5px;
+  padding: 2px 5px;
+  transition: color 0.15s, background 0.15s;
 }
 
 .crumb:hover {
   color: var(--accent-2);
+  background: var(--accent-soft);
 }
 
-.crumb .sep {
+/* 分隔符独立成段：不吃 hover 高亮，不参与「点击定位」 */
+.crumb-sep {
   color: var(--text-3);
+  flex-shrink: 0;
+  user-select: none;
 }
 
 .search-crumb {
@@ -451,6 +472,19 @@
   color: var(--text);
   cursor: default;
   font-weight: 600;
+}
+
+.crumb.current:hover {
+  color: var(--text);
+  background: transparent;
+}
+
+/* side 变体：仅显当前目录名，胶囊壳无信息价值 → 去壳保持紧凑 */
+.fb.side .crumbs {
+  background: transparent;
+  border-color: transparent;
+  height: auto;
+  padding: 0;
 }
 
 /* 侧栏工具：列表/树切换 + 收起 */
